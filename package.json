@@ -1,0 +1,53 @@
+{
+  "name": "inferencefi-receipt-root",
+  "version": "0.1.0",
+  "description": "Design note, reference implementation and test vectors for Inference Finance IF-D8: a Flop receipt root as the hook jobId. bigint only, zero runtime dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "DESIGN.md",
+    "README.md",
+    "vectors",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "vectors": "tsx scripts/gen-vectors.ts",
+    "forge": "cd foundry && forge test",
+    "check": "npm run typecheck && npm test && npm run forge"
+  },
+  "keywords": [
+    "merkle",
+    "receipt",
+    "payment-channel",
+    "nullifier",
+    "htlc",
+    "inference",
+    "bigint"
+  ],
+  "devDependencies": {
+    "@noble/hashes": "^2.4.0",
+    "@types/node": "^20.19.43",
+    "fast-check": "^4.11.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

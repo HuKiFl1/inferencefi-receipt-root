@@ -1,0 +1,11 @@
+[profile.default]
+src = "test"
+test = "test"
+out = "out"
+cache_path = "cache"
+libs = []
+solc_version = "0.8.39"
+evm_version = "cancun"
+optimizer = false
+gas_limit = "18446744073709551615"
+fs_permissions = [{ access = "read", path = "../vectors" }]

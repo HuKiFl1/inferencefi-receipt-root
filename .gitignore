@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.mutants/
+foundry/out/
+foundry/cache/
+foundry/broadcast/
