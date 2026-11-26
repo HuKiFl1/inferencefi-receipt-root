@@ -7,3 +7,5 @@ coverage/
 foundry/out/
 foundry/cache/
 foundry/broadcast/
+vendor/flop-receipt-root/out/
+vendor/flop-receipt-root/cache/

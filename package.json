@@ -1,7 +1,7 @@
 {
   "name": "inferencefi-receipt-root",
   "version": "0.1.0",
-  "description": "Design note, reference implementation and test vectors for Inference Finance IF-D8: a Flop receipt root as the hook jobId. bigint only, zero runtime dependencies.",
+  "description": "Inference Finance IF-D8 consumer layer on xbtMelchizedek's flop-receipt-root v0.3.2: TypeScript reference of the receipt-root format, hook/rewards/minter consumer models, Solidity reference consumers, and shared test vectors.",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -30,15 +30,17 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "vectors": "tsx scripts/gen-vectors.ts",
-    "forge": "cd foundry && forge test",
-    "check": "npm run typecheck && npm test && npm run forge"
+    "forge": "npm run forge:consumers && npm run forge:upstream",
+    "check": "npm run typecheck && npm test && npm run forge",
+    "forge:consumers": "cd foundry && forge test",
+    "forge:upstream": "cd vendor/flop-receipt-root && forge test"
   },
   "keywords": [
     "merkle",
-    "receipt",
+    "receipt-root",
+    "eip-712",
     "payment-channel",
     "nullifier",
-    "htlc",
     "inference",
     "bigint"
   ],

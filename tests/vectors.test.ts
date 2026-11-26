@@ -1,33 +1,31 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import * as m from "../src/index.js";
+import * as lib from "../src/index.js";
 import { serializeVectors } from "../scripts/vectors.js";
-import { loadVectors, replayCommitments, replayMinter, replayPrimitives, replayRewards, replayTrees } from "./replay.js";
+import { VECTORS_PATH, loadVectors, replayAll } from "./replay.js";
 
-describe("test vectors", () => {
-  it("the committed JSON is exactly what the generator produces (run `npm run vectors` after a change)", () => {
-    const committed = readFileSync(new URL("../vectors/receipt-root-v1.json", import.meta.url), "utf8");
-    expect(committed).toBe(serializeVectors());
+describe("vectors/if-d8-v2.json", () => {
+  it("is exactly what the generator produces (run `npm run vectors` after changing scripts/vectors.ts)", () => {
+    expect(readFileSync(VECTORS_PATH, "utf8")).toBe(serializeVectors());
   });
 
-  const v = loadVectors();
-  it("hashes, leaf encodings and nullifiers replay", () => replayPrimitives(m, v));
-  it("trees, proofs and negative proofs replay", () => replayTrees(m, v));
-  it("jobIds, payouts and reclaim eligibility replay", () => replayCommitments(m, v));
-  it("AgentRewards scenario replays", () => replayRewards(m, v));
-  it("OmerMinter scenario replays", () => replayMinter(m, v));
+  it("replays through the reference implementation", () => {
+    replayAll(lib, loadVectors());
+  });
 
-  it("covers every negative-proof class and every scenario outcome the threat model names", () => {
-    expect(v.negativeProofs.length).toBeGreaterThanOrEqual(13);
-    const rewardCodes = new Set(v.rewardsScenario.steps.map((s: { expect: string }) => s.expect));
-    for (const c of ["OK", "UNAUTHORIZED_ATTESTER", "ROOT_EXISTS", "EPOCH_REGRESSION", "NULLIFIER_SPENT", "STATE_REPLAYED", "INVALID_PROOF", "DOMAIN_MISMATCH", "EPOCH_MISMATCH", "STALE_NONCE", "EPOCH_EXPIRED", "UNKNOWN_ROOT", "CHECKPOINT_MISMATCH", "EMPTY_ROOT_MISMATCH"]) {
-      expect(rewardCodes.has(c), c).toBe(true);
+  it("covers every contract-facing error code and every adversarial case the brief names", () => {
+    const v = loadVectors();
+    const expects = new Set<string>(v.scenario.steps.map((s: { expect?: string }) => s.expect).filter(Boolean));
+    for (const c of Object.values(lib.ErrorCode).filter((c) => c !== "INVALID_INPUT")) expect(expects, c).toContain(c);
+    const notes = v.scenario.steps.map((s: { note: string }) => s.note).join("\n");
+    for (const needle of ["another genesis", "replayed as epoch 2", "forged proof", "double-claim", "non-contiguous", "not the latest root", "no longer the latest root"]) {
+      expect(notes, needle).toContain(needle);
     }
-    const minterCodes = new Set(v.minterScenario.steps.map((s: { expect: string }) => s.expect));
-    for (const c of ["OK", "DUPLICATE_LOCK", "UNAUTHORIZED", "ALREADY_SETTLED", "TIMEOUT_NOT_REACHED", "NOT_SERVED", "CHANNEL_MISMATCH", "STALE_ROOT", "ESCROW_MISMATCH", "PARTY_MISMATCH"]) {
-      expect(minterCodes.has(c), c).toBe(true);
-    }
-    const jobIds = new Set(v.jobIds.map((j: { jobId: string }) => j.jobId));
-    expect(jobIds.size).toBe(v.jobIds.length);
+    expect(v.proofCases.cases.map((c: { name: string }) => c.name)).toContain("inner-node-as-raw-leaf");
+    const jobNames = v.jobIdCases.cases.map((c: { name: string }) => c.name);
+    expect(jobNames).toContain("same event key, different leaf layout");
+    expect(jobNames).toContain("different eventIndex");
+    expect(v.format.jobIdTagString).toBe("InferenceFi.IF-D8.jobId.v1");
+    expect(v.format.jobIdTag).toBe(lib.JOB_ID_TAG);
   });
 });

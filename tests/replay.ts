@@ -1,50 +1,43 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type * as Lib from "../src/index.js";
 
-/** The module under test: the real `src/`, or a mutated copy of it. */
-export type M = typeof import("../src/index.js");
-type Hex = `0x${string}`;
-/** Parsed vector JSON. Shapes are checked by the assertions that read it. */
-type J = any;
+/** Replays vectors/if-d8-v2.json against a copy of the library (the real one, or a mutant). */
+export type M = typeof Lib;
+type Hex = Lib.Hex;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type J = Record<string, any>;
 
-export function loadVectors(): J {
-  return JSON.parse(readFileSync(new URL("../vectors/receipt-root-v1.json", import.meta.url), "utf8"));
-}
+export const VECTORS_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "vectors", "if-d8-v2.json");
+export const loadVectors = (): J => JSON.parse(readFileSync(VECTORS_PATH, "utf8")) as J;
 
-const fromHex = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h.slice(2), "hex"));
-
-export function parseLeaf(j: J) {
-  return {
-    flopGenesis: j.flopGenesis as Hex,
-    evmChainId: BigInt(j.evmChainId),
-    poolId: j.poolId as Hex,
-    channelId: j.channelId as Hex,
-    provider: j.provider as Hex,
-    payer: j.payer as Hex,
-    cumulativeOwed: BigInt(j.cumulativeOwed),
-    escrow: BigInt(j.escrow),
-    nonce: BigInt(j.nonce),
-    epoch: BigInt(j.epoch),
-    finalizedHeight: BigInt(j.finalizedHeight),
-    stateRoot: j.stateRoot as Hex,
-  };
-}
-
-export function parseCommitment(j: J) {
-  return {
-    flopGenesis: j.flopGenesis as Hex,
-    evmChainId: BigInt(j.evmChainId),
-    poolId: j.poolId as Hex,
-    hook: j.hook as Hex,
-    epoch: BigInt(j.epoch),
-    checkpointHeight: BigInt(j.checkpointHeight),
-    leafCount: BigInt(j.leafCount),
-    keccakRoot: j.keccakRoot as Hex,
-    blakeRoot: j.blakeRoot as Hex,
-  };
-}
-
-const parseProof = (j: J) => ({ index: BigInt(j.index), leafCount: BigInt(j.leafCount), siblings: j.siblings as Hex[] });
+const big = (v: string | number): bigint => BigInt(v);
+const msgOf = (j: J): Lib.RootMsg => ({
+  genesis: j.genesis,
+  epoch: big(j.epoch),
+  fromBlock: big(j.fromBlock),
+  toBlock: big(j.toBlock),
+  toBlockHash: j.toBlockHash,
+  count: big(j.count),
+  root: j.root,
+});
+const lockOf = (j: J): Lib.LockInput => ({
+  lockId: j.lockId,
+  channelId: j.channelId,
+  agent: j.agent,
+  miner: j.miner,
+  modelHash: j.modelHash,
+  payer: j.payer,
+  provider: j.provider,
+  lender: j.lender,
+  lenderPrincipal: big(j.lenderPrincipal),
+  payerDeposit: big(j.payerDeposit),
+  omerPerGnNum: big(j.omerPerGnNum),
+  omerPerGnDen: big(j.omerPerGnDen),
+  minFlopBlock: big(j.minFlopBlock),
+});
 
 function outcome(m: M, fn: () => void): string {
   try {
@@ -56,133 +49,154 @@ function outcome(m: M, fn: () => void): string {
   }
 }
 
-export function replayPrimitives(m: M, v: J): void {
-  for (const h of v.hashes) {
-    const fn = h.fn === "keccak256" ? m.KECCAK256 : m.BLAKE2B256;
-    assert.equal(m.bytesToHex(fn(fromHex(h.input))), h.output, `${h.fn}(${h.input})`);
+export function replayFormat(m: M, v: J): void {
+  assert.equal(m.LEAF_TYPEHASH, v.format.leafTypehash, "LEAF_TYPEHASH");
+  assert.equal(m.ROOT_TYPEHASH, v.format.rootTypehash, "ROOT_TYPEHASH");
+  assert.equal(m.domainSeparator(big(v.format.domain.chainId), v.format.domain.verifyingContract), v.format.domain.separator, "domain separator");
+  for (const c of v.leaves) {
+    const s = m.settlementFromJson(c.settlement);
+    assert.equal(m.bytesToHex(m.encodeSettlement(s)), c.encoding, `encoding ${c.name}`);
+    assert.equal(m.leafOf(s), c.leaf, `leaf ${c.name}`);
   }
-  assert.equal(m.EMPTY_KECCAK_ROOT, v.encoding.emptyRoots.keccak256);
-  assert.equal(m.EMPTY_BLAKE_ROOT, v.encoding.emptyRoots.blake2b256);
-  for (const c of v.leafEncodings) {
-    const leaf = parseLeaf(c.leaf);
-    assert.equal(m.bytesToHex(m.encodeLeaf(leaf)), c.encoded, `encode ${c.name}`);
-    assert.equal(m.leafHash(leaf, m.KECCAK256), c.keccakLeafHash, `keccak leaf ${c.name}`);
-    assert.equal(m.leafHash(leaf, m.BLAKE2B256), c.blakeLeafHash, `blake leaf ${c.name}`);
-    assert.equal(m.nullifierOf(leaf), c.nullifier, `nullifier ${c.name}`);
-  }
-}
-
-export function replayTrees(m: M, v: J): void {
   for (const t of v.trees) {
-    const leaves = t.leaves.map(parseLeaf);
-    const c = parseCommitment(t.commitment);
-    // Reverse the input so the builder's own sort is exercised.
-    const snap = m.buildSnapshot(
-      { domain: c, hook: c.hook, epoch: c.epoch, epochLength: BigInt(v.encoding.epochLength) },
-      [...leaves].reverse(),
-    );
-    assert.deepEqual(snap.commitment, c, `commitment ${t.name}`);
-    assert.equal(snap.jobId, t.jobId, `jobId ${t.name}`);
-    assert.deepEqual([...snap.tree.leafHashes.keccak256], t.keccakLeafHashes, `keccak leaves ${t.name}`);
-    assert.deepEqual([...snap.tree.leafHashes.blake2b256], t.blakeLeafHashes, `blake leaves ${t.name}`);
-    for (const p of t.proofs) {
-      const i = Number(p.index);
-      for (const [hash, key, root, hashes] of [
-        [m.KECCAK256, "keccakSiblings", c.keccakRoot, t.keccakLeafHashes],
-        [m.BLAKE2B256, "blakeSiblings", c.blakeRoot, t.blakeLeafHashes],
-      ] as const) {
-        const proof = snap.tree.proof(i, hash);
-        assert.deepEqual([...proof.siblings], p[key], `${key} ${t.name}[${i}]`);
-        const ok = m.verifyProof(hash, root, hashes[i], { index: BigInt(i), leafCount: c.leafCount, siblings: p[key] });
-        assert.equal(ok, true, `verify ${key} ${t.name}[${i}]`);
+    const leaves: Hex[] = t.settlements.map((s: Lib.SettlementJson) => m.leafOf(m.settlementFromJson(s)));
+    assert.deepEqual(leaves, t.leaves, `leaves ${t.name}`);
+    const tree = m.buildTree(leaves);
+    assert.deepEqual(tree.layers[0], t.sortedLeaves, `sorted ${t.name}`);
+    assert.equal(tree.root, t.root, `root ${t.name}`);
+    for (const [i, l] of leaves.entries()) {
+      assert.deepEqual(m.proofFor(tree, l), t.proofs[i], `proof ${t.name}[${i}]`);
+      assert.equal(m.verifyRawProof(t.root, l, t.proofs[i]), true, `verify ${t.name}[${i}]`);
+    }
+  }
+  const pc = v.proofCases;
+  assert.equal(m.pairHash(pc.nodeAsLeaf.left, pc.nodeAsLeaf.right), pc.nodeAsLeaf.node, "inner node");
+  for (const c of pc.cases) assert.equal(m.verifyRawProof(c.root, c.leaf, c.proof), c.expect, `proof case ${c.name}`);
+  const d = v.format.domain;
+  for (const c of v.verifyCases) {
+    const msg = msgOf(c.msg);
+    const roots = new m.FlopReceiptRootModel({ genesis: msg.genesis, startBlock: msg.fromBlock, chainId: big(d.chainId), verifyingContract: d.verifyingContract });
+    assert.equal(roots.digest(msg), c.digest, `verify case ${c.name} digest`);
+    roots.submit(msg, true);
+    assert.equal(roots.verify(big(c.epoch), m.settlementFromJson(c.settlement), c.proof), c.expect, `verify case ${c.name}`);
+  }
+  const hd = v.hookDataCases;
+  for (const c of hd.cases) {
+    assert.equal(outcome(m, () => m.decodeHookData(c.hex)), c.expect, `hookData case ${c.name}`);
+    if (c.expect === "OK") {
+      const want = { epoch: big(hd.decoded.epoch), settlement: m.settlementFromJson(hd.decoded.settlement), proof: hd.decoded.proof };
+      assert.deepEqual(m.decodeHookData(c.hex), want, `hookData case ${c.name} decoded`);
+      assert.equal(m.encodeHookData(want), c.hex, `hookData case ${c.name} encoded`);
+    }
+  }
+  const jc = v.jobIdCases;
+  assert.equal(m.JOB_ID_TAG, jc.tag, "JOB_ID_TAG");
+  assert.equal(m.JOB_ID_TAG_STRING, jc.tagString, "JOB_ID_TAG_STRING");
+  assert.equal(m.jobIdOf(m.settlementFromJson(jc.base.settlement)), jc.base.jobId, "jobId base");
+  assert.equal(m.leafOf(m.settlementFromJson(jc.base.settlement)), jc.base.leaf, "leaf base");
+  for (const c of jc.cases) {
+    const a = m.settlementFromJson(c.a);
+    const b = m.settlementFromJson(c.b);
+    assert.equal(m.jobIdOf(a), c.jobIdA, `jobIdA ${c.name}`);
+    assert.equal(m.jobIdOf(b), c.jobIdB, `jobIdB ${c.name}`);
+    assert.equal(m.leafOf(a), c.leafA, `leafA ${c.name}`);
+    assert.equal(m.leafOf(b), c.leafB, `leafB ${c.name}`);
+    assert.equal(m.jobIdOf(a) === m.jobIdOf(b), c.expectEqual, `jobId equal ${c.name}`);
+    if (c.expectEqual) assert.notEqual(m.leafOf(a), m.leafOf(b), `leaves differ ${c.name}`);
+  }
+}
+
+export function replayScenario(m: M, v: J): void {
+  const sc = v.scenario;
+  const p = sc.params;
+  const chain = big(p.evmChainId);
+  const roots = new m.FlopReceiptRootModel({ genesis: p.genesis, startBlock: big(p.startBlock), chainId: chain, verifyingContract: p.rootsAddress });
+  const hook = new m.ReceiptJobHookModel(roots, { evmChainId: chain, poolManager: p.poolManager, pools: p.pools });
+  const rp = { evmChainId: chain, poolId: p.rewards.poolId as Hex, metric: p.rewards.metric as Lib.RewardMetric, claimWindowEpochs: big(p.rewards.claimWindowEpochs) };
+  const rewards: Record<string, Lib.AgentRewardsConsumerModel> = {
+    sum: new m.AgentRewardsConsumerModel(roots, hook, { ...rp, mode: p.rewards.consumers.sum }),
+    latest: new m.AgentRewardsConsumerModel(roots, hook, { ...rp, mode: p.rewards.consumers.latest }),
+  };
+  const facts = new Map<string, Lib.UnservedFacts>();
+  const attestor: Lib.UnservedAttestor = {
+    verifyUnserved(genesis, channelId, epoch) {
+      const f = facts.get(`${channelId}:${epoch}`);
+      if (genesis !== p.genesis || f === undefined) m.fail(m.ErrorCode.AttestationMismatch, "no attestation");
+      return f;
+    },
+  };
+  const mp = {
+    evmChainId: chain,
+    stalenessBlocks: big(p.minter.stalenessBlocks),
+    challengeWindowBlocks: big(p.minter.challengeWindowBlocks),
+    reclaimPolicy: p.minter.reclaimPolicy as Lib.ReclaimPolicy,
+  };
+  const minters: Record<string, Lib.OmerMinterConsumerModel> = {
+    stub: new m.OmerMinterConsumerModel(roots, m.UNSERVED_ATTESTOR_STUB, mp),
+    attested: new m.OmerMinterConsumerModel(roots, attestor, mp),
+  };
+  const tuple = (s: Lib.Settled) => [s.owed, s.toProvider, s.toLender, s.toPayer, s.overrun, s.lenderShortfall].map(String);
+
+  for (const [e, ep] of (sc.epochs as J[]).entries()) {
+    const built = m.buildEpoch({ ...msgOf(ep.msg), settlements: ep.items.map((it: J) => m.settlementFromJson(it.settlement)) });
+    assert.deepEqual(built.msg, msgOf(ep.msg), `epoch ${e + 1} message`);
+    for (const it of ep.items) assert.deepEqual(built.items.find((b) => b.leaf === it.leaf)?.proof, it.proof, `epoch ${e + 1} proof`);
+  }
+
+  for (const [i, st] of (sc.steps as J[]).entries()) {
+    const what = `step ${i} (${st.note})`;
+    const ctx = { chainId: big(st.chainId ?? p.evmChainId), caller: (st.caller ?? p.poolManager) as Hex };
+    const s = st.settlement ? m.settlementFromJson(st.settlement) : undefined;
+    if (s) assert.equal(m.leafOf(s), st.leaf, `${what} leaf`);
+    switch (st.op) {
+      case "submit":
+        assert.equal(roots.digest(msgOf(st.msg)), st.digest, `${what} digest`);
+        assert.equal(outcome(m, () => roots.submit(msgOf(st.msg), st.quorum)), st.expect, what);
+        break;
+      case "freeze":
+        assert.equal(outcome(m, () => roots.freeze(msgOf(st.msgA), true, msgOf(st.msgB), true)), st.expect, what);
+        break;
+      case "tag": {
+        if (st.canonical) assert.equal(m.encodeHookData({ epoch: big(st.epoch), settlement: s!, proof: st.proof }), st.hookData, `${what} hookData`);
+        let job: string | undefined;
+        assert.equal(outcome(m, () => (job = hook.tag(ctx, st.poolId, st.hookData).jobId)), st.expect, what);
+        assert.equal(job, st.jobId ?? undefined, `${what} jobId`);
+        break;
       }
+      case "claim": {
+        let r: Lib.RewardClaim | undefined;
+        assert.equal(outcome(m, () => (r = rewards[st.consumer]!.claim(ctx, big(st.epoch), s!, st.proof))), st.expect, what);
+        assert.equal(r?.credit.toString(), st.credit ?? undefined, `${what} credit`);
+        assert.equal(r?.channelEpochTotal.toString(), st.channelEpochTotal ?? undefined, `${what} total`);
+        break;
+      }
+      case "open":
+        assert.equal(outcome(m, () => minters[st.consumer]!.open(ctx, lockOf(st.lock))), st.expect, what);
+        break;
+      case "setUnserved":
+        facts.set(`${st.channelId}:${big(st.epoch)}`, { lastFinalizedHeight: big(st.lastFinalizedHeight), owed: big(st.owed) });
+        break;
+      case "redeem": {
+        let r: string[] | undefined;
+        assert.equal(outcome(m, () => (r = tuple(minters[st.consumer]!.redeem(ctx, st.lockId, big(st.epoch), s!, st.proof)))), st.expect, what);
+        assert.deepEqual(r, st.payouts ?? undefined, `${what} payouts`);
+        break;
+      }
+      case "reclaim": {
+        let r: string[] | undefined;
+        assert.equal(outcome(m, () => (r = tuple(minters[st.consumer]!.reclaim(ctx, st.lockId, big(st.epoch), st.attestation)))), st.expect, what);
+        assert.deepEqual(r, st.payouts ?? undefined, `${what} payouts`);
+        break;
+      }
+      default:
+        throw new Error(`unknown op ${String(st.op)}`);
     }
   }
-  for (const n of v.negativeProofs) {
-    const ok = m.verifyProof(m.KECCAK256, n.root, n.leafHash, { index: BigInt(n.index), leafCount: BigInt(n.leafCount), siblings: n.siblings });
-    assert.equal(ok, false, `negative proof ${n.name} must be rejected`);
-  }
+  assert.equal(rewards.sum!.totalCredited().toString(), sc.totals.sum, "sum total");
+  assert.equal(rewards.latest!.totalCredited().toString(), sc.totals.latest, "latest total");
 }
 
-export function replayCommitments(m: M, v: J): void {
-  for (const c of v.jobIds) assert.equal(m.jobIdOf(parseCommitment(c.commitment)), c.jobId, `jobId ${c.name}`);
-  for (const n of v.nullifiers) {
-    const got = m.nullifierOf({ flopGenesis: n.flopGenesis, evmChainId: BigInt(n.evmChainId), poolId: n.poolId, channelId: n.channelId, epoch: BigInt(n.epoch) });
-    assert.equal(got, n.nullifier, `nullifier ${n.name}`);
-  }
-  for (const p of v.payouts) {
-    const got = m.waterfall(BigInt(p.escrow), BigInt(p.lenderPrincipal), BigInt(p.owed));
-    assert.deepEqual(
-      got,
-      { toProvider: BigInt(p.toProvider), toLender: BigInt(p.toLender), toPayer: BigInt(p.toPayer), overrun: BigInt(p.overrun), lenderShortfall: BigInt(p.lenderShortfall) },
-      `waterfall ${p.escrow}/${p.lenderPrincipal}/${p.owed}`,
-    );
-  }
-  for (const r of v.reclaimEligibility) {
-    const got = m.reclaimEligible(BigInt(r.checkpointHeight), BigInt(r.finalizedHeight), BigInt(r.stalenessBlocks), BigInt(r.challengeWindowBlocks));
-    assert.equal(got, r.eligible, `eligibility ${r.finalizedHeight}/${r.checkpointHeight}`);
-  }
-}
-
-export function replayRewards(m: M, v: J): void {
-  const s = v.rewardsScenario;
-  const p = s.params;
-  const registry = new m.RootRegistry({ domain: parseCommitment({ ...p, epoch: 0, checkpointHeight: 0, leafCount: 0 }), hook: p.hook, epochLength: BigInt(p.epochLength) });
-  const rewards = new m.AgentRewardsModel(registry, { claimWindowEpochs: BigInt(p.claimWindowEpochs) });
-  for (const [i, st] of s.steps.entries()) {
-    if (st.op === "acceptRoot") {
-      assert.equal(outcome(m, () => void registry.accept(parseCommitment(st.commitment), st.attested)), st.expect, `rewards ${i}: ${st.note}`);
-      if (st.expect === "OK") assert.equal(registry.latestJobId(), st.jobId);
-    } else {
-      let credit = 0n;
-      const code = outcome(m, () => {
-        credit = rewards.claim({ jobId: st.jobId, leaf: parseLeaf(st.leaf), proof: parseProof(st.proof) }).credit;
-      });
-      assert.equal(code, st.expect, `rewards ${i}: ${st.note}`);
-      assert.equal(credit, BigInt(st.credit), `rewards ${i} credit: ${st.note}`);
-    }
-  }
-  assert.equal(rewards.totalCredited(), BigInt(s.totalCredited));
-}
-
-export function replayMinter(m: M, v: J): void {
-  const s = v.minterScenario;
-  const p = s.params;
-  const registry = new m.RootRegistry({ domain: parseCommitment({ ...p, epoch: 0, checkpointHeight: 0, leafCount: 0 }), hook: p.hook, epochLength: BigInt(p.epochLength) });
-  const minter = new m.OmerMinterModel(registry, {
-    stalenessBlocks: BigInt(p.stalenessBlocks),
-    challengeWindowBlocks: BigInt(p.challengeWindowBlocks),
-    reclaimPolicy: p.reclaimPolicy,
-  });
-  for (const [i, st] of s.steps.entries()) {
-    const what = `minter ${i}: ${st.note}`;
-    if (st.op === "acceptRoot") assert.equal(outcome(m, () => void registry.accept(parseCommitment(st.commitment), true)), st.expect, what);
-    else if (st.op === "open") {
-      const l = st.lock;
-      const lock = { ...l, lenderPrincipal: BigInt(l.lenderPrincipal), payerDeposit: BigInt(l.payerDeposit) };
-      assert.equal(outcome(m, () => void minter.open(lock)), st.expect, what);
-    } else {
-      let got: unknown = { toProvider: 0n, toLender: 0n, toPayer: 0n, overrun: 0n, lenderShortfall: 0n };
-      const claim = { jobId: st.jobId, leaf: parseLeaf(st.leaf), proof: parseProof(st.proof) };
-      const code = outcome(m, () => {
-        const r = st.op === "redeem" ? minter.redeem(st.lockId, claim, st.by) : minter.reclaim(st.lockId, claim, st.by);
-        got = { toProvider: r.toProvider, toLender: r.toLender, toPayer: r.toPayer, overrun: r.overrun, lenderShortfall: r.lenderShortfall };
-      });
-      assert.equal(code, st.expect, what);
-      const e = st.payouts;
-      assert.deepEqual(
-        got,
-        { toProvider: BigInt(e.toProvider), toLender: BigInt(e.toLender), toPayer: BigInt(e.toPayer), overrun: BigInt(e.overrun), lenderShortfall: BigInt(e.lenderShortfall) },
-        `${what} payouts`,
-      );
-    }
-  }
-}
-
-export function replayAll(m: M, v: J = loadVectors()): void {
-  replayPrimitives(m, v);
-  replayTrees(m, v);
-  replayCommitments(m, v);
-  replayRewards(m, v);
-  replayMinter(m, v);
+export function replayAll(m: M, v: J): void {
+  replayFormat(m, v);
+  replayScenario(m, v);
 }

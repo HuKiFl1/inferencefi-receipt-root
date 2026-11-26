@@ -1,11 +1,21 @@
 [profile.default]
-src = "test"
+src = "src"
 test = "test"
 out = "out"
 cache_path = "cache"
-libs = []
-solc_version = "0.8.39"
+libs = ["../vendor/flop-receipt-root/lib"]
+remappings = [
+  "forge-std/=../vendor/flop-receipt-root/lib/forge-std/src/",
+  "flop-receipt-root/=../vendor/flop-receipt-root/contracts/src/",
+]
+allow_paths = ["../vendor"]
+solc = "0.8.28"
 evm_version = "cancun"
-optimizer = false
+optimizer = true
+optimizer_runs = 200
 gas_limit = "18446744073709551615"
+memory_limit = 1073741824
 fs_permissions = [{ access = "read", path = "../vectors" }]
+
+[profile.default.fuzz]
+runs = 256

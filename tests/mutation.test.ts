@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -6,150 +5,94 @@ import { afterAll, describe, expect, it } from "vitest";
 import { type M, loadVectors, replayAll } from "./replay.js";
 
 /**
- * Mutation-style check: each mutant injects one realistic bug into a copy of
- * src/, and an independent battery must fail on it. The battery replays the
- * committed JSON vectors and adds a few attacks the vectors cannot express.
- * The unmutated copy must pass the same battery, so a kill cannot come from
- * the harness.
+ * Single-point mutants of src/. Each must make the vector replay, or the
+ * upstream fixture check, fail; otherwise the vectors are not pinning that
+ * rule. The unmutated copy must pass.
  */
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const work = join(root, ".mutants");
 
 interface Mutant {
-  readonly id: string;
+  readonly name: string;
   readonly file: string;
-  readonly find: string;
-  readonly replace: string;
+  readonly from: string;
+  readonly to: string;
 }
 
 const MUTANTS: readonly Mutant[] = [
-  // hashes
-  { id: "keccak-sha3-padding", file: "hash/keccak.ts", find: "last[message.length - offset]! ^ 0x01;", replace: "last[message.length - offset]! ^ 0x06;" },
-  { id: "blake2b-fixed-512-param", file: "hash/blake2b.ts", find: "h[0] = (h[0]! ^ 0x01010000 ^ outLen) >>> 0;", replace: "h[0] = (h[0]! ^ 0x01010000 ^ 64) >>> 0;" },
-  // encoding
-  { id: "little-endian-integers", file: "bytes.ts", find: "for (let i = width - 1; i >= 0; i--) {", replace: "for (let i = 0; i < width; i++) {" },
-  { id: "leaf-without-prefix", file: "leaf.ts", find: "return hash(concatBytes(Uint8Array.of(Prefix.LEAF), encodeLeaf(leaf)));", replace: "return hash(encodeLeaf(leaf));" },
-  { id: "leaf-drops-state-root", file: "leaf.ts", find: "    fixedBytes(leaf.stateRoot, 32, \"stateRoot\"),\n  );", replace: "    new Uint8Array(32),\n  );" },
-  // tree
-  { id: "node-without-prefix", file: "merkle.ts", find: "return hash(concatBytes(Uint8Array.of(Prefix.NODE), left, right));", replace: "return hash(concatBytes(left, right));" },
-  { id: "duplicate-odd-node", file: "merkle.ts", find: ": level[i]!);", replace: ": nodeHashBytes(hash, level[i]!, level[i]!));" },
-  { id: "empty-root-zero", file: "merkle.ts", find: "return bytesToHex(hash(new Uint8Array(0)));", replace: "return bytesToHex(new Uint8Array(32));" },
-  { id: "verify-ignores-leftover-siblings", file: "merkle.ts", find: "return k === siblings.length && bytesToHex(h) === root;", replace: "return bytesToHex(h) === root;" },
-  { id: "verify-accepts-index-out-of-range", file: "merkle.ts", find: "index < 0n || index >= leafCount) return false;", replace: "index < 0n) return false;" },
-  { id: "tree-unsorted", file: "merkle.ts", find: "const leaves = [...input].sort((a, b) => compareHex(a.channelId, b.channelId));", replace: "const leaves = [...input];" },
-  { id: "tree-allows-duplicate-channel", file: "merkle.ts", find: "if (leaves[i]!.channelId === leaves[i - 1]!.channelId) {", replace: "if (false) {" },
-  // commitments
-  { id: "job-id-without-chain", file: "commitment.ts", find: "        uintBE(c.evmChainId, 8),\n        fixedBytes(c.hook, 20, \"hook\"),", replace: "        fixedBytes(c.hook, 20, \"hook\")," },
-  { id: "job-id-without-blake-root", file: "commitment.ts", find: "        fixedBytes(c.blakeRoot, 32, \"blakeRoot\"),\n", replace: "" },
-  { id: "job-id-without-leaf-count", file: "commitment.ts", find: "        uintBE(c.leafCount, 8),\n", replace: "" },
-  { id: "nullifier-without-epoch", file: "commitment.ts", find: "        fixedBytes(leaf.channelId, 32, \"channelId\"),\n        uintBE(leaf.epoch, 8),\n", replace: "        fixedBytes(leaf.channelId, 32, \"channelId\"),\n" },
-  // registry
-  { id: "registry-second-root-per-epoch", file: "registry.ts", find: "if (this.#byEpoch.has(c.epoch)) fail(", replace: "if (false) fail(" },
-  { id: "registry-no-checkpoint-pin", file: "registry.ts", find: "if (c.checkpointHeight !== checkpointOf(c.epoch, this.params.epochLength)) {", replace: "if (false) {" },
-  { id: "registry-ignores-attestation", file: "registry.ts", find: "if (!attested) fail(", replace: "if (false) fail(" },
-  // receipt verification
-  { id: "receipt-no-epoch-binding", file: "receipt.ts", find: "if (leaf.epoch !== c.epoch) fail(", replace: "if (false) fail(" },
-  { id: "receipt-no-domain-check", file: "receipt.ts", find: "if (!sameDomain(leaf, c)) fail(", replace: "if (false) fail(" },
-  { id: "receipt-leaf-count-unbound", file: "receipt.ts", find: "if (proof.leafCount !== c.leafCount || !verifyProof(", replace: "if (!verifyProof(" },
-  // AgentRewards
-  { id: "rewards-no-nullifier", file: "rewards.ts", find: "if (this.#spent.has(nullifier)) fail(", replace: "if (false) fail(" },
-  { id: "rewards-credit-uncapped", file: "rewards.ts", find: "const credit = min(leaf.cumulativeOwed, leaf.escrow) - min(lastOwed, leaf.escrow);", replace: "const credit = leaf.cumulativeOwed - lastOwed;" },
-  { id: "rewards-accepts-rollback", file: "rewards.ts", find: "if (leaf.nonce < lastNonce) fail(", replace: "if (false) fail(" },
-  { id: "rewards-window-off-by-one", file: "rewards.ts", find: "if (latest.epoch > c.epoch + this.#params.claimWindowEpochs) {", replace: "if (latest.epoch >= c.epoch + this.#params.claimWindowEpochs) {" },
-  // OmerMinter and settlement
-  { id: "minter-reclaim-any-root", file: "minter.ts", find: "if (claim.jobId !== this.#registry.latestJobId()) fail(", replace: "if (false) fail(" },
-  { id: "minter-redeem-by-anyone", file: "minter.ts", find: "if (by !== lock.provider) fail(", replace: "if (false) fail(" },
-  { id: "minter-settles-twice", file: "minter.ts", find: "if (lock.status !== \"Locked\") fail(", replace: "if (false) fail(" },
-  { id: "minter-redeem-unserved", file: "minter.ts", find: "if (claim.leaf.nonce === 0n || claim.leaf.cumulativeOwed === 0n) fail(", replace: "if (false) fail(" },
-  { id: "minter-no-escrow-binding", file: "minter.ts", find: "if (leaf.escrow !== lock.escrow) fail(", replace: "if (false) fail(" },
-  { id: "timeout-off-by-one", file: "settlement.ts", find: "return checkpointHeight >= earliestReclaimHeight(", replace: "return checkpointHeight > earliestReclaimHeight(" },
-  { id: "timeout-ignores-window", file: "settlement.ts", find: "return finalizedHeight + stalenessBlocks + challengeWindowBlocks;", replace: "return finalizedHeight + stalenessBlocks;" },
-  { id: "payer-senior-to-lender", file: "settlement.ts", find: "const toLender = min(lenderPrincipal, escrow - toProvider);", replace: "const toLender = escrow - toProvider - min(escrow - lenderPrincipal, escrow - toProvider);" },
-  // watchers
-  { id: "audit-misses-rollback", file: "audit.ts", find: "if (b.nonce < a.nonce) out.push(", replace: "if (false) out.push(" },
-  { id: "audit-misses-blake-mismatch", file: "audit.ts", find: "if (tree.roots.blake2b256 !== c.blakeRoot) out.push(", replace: "if (false) out.push(" },
+  { name: "single keccak leaf", file: "format/settlement.ts", from: "keccak256(keccak256(encodeSettlement(s)))", to: "keccak256(encodeSettlement(s))" },
+  { name: "unsorted pair hash", file: "format/merkle.ts", from: "compareHex(a, b) <= 0 ? [a, b] : [b, a]", to: "[a, b]" },
+  { name: "odd node hashed with itself", file: "format/merkle.ts", from: ": level[i]!);", to: ": pairHash(level[i]!, level[i]!));" },
+  { name: "leaves not sorted", file: "format/merkle.ts", from: "[...leaves].sort(compareHex)", to: "[...leaves]" },
+  { name: "proof length cap off", file: "format/receiptRoot.ts", from: "this.#frozen || proof.length > MAX_PROOF", to: "this.#frozen" },
+  { name: "verify ignores genesis", file: "format/receiptRoot.ts", from: " || s.genesis !== this.params.genesis) return false;", to: ") return false;" },
+  { name: "verify ignores block range", file: "format/receiptRoot.ts", from: "if (s.settledBlock < e.fromBlock || s.settledBlock > e.toBlock) return false;", to: "" },
+  { name: "verify ignores freeze", file: "format/receiptRoot.ts", from: "if (this.#frozen || proof.length", to: "if (proof.length" },
+  { name: "non-contiguous epochs", file: "format/receiptRoot.ts", from: "m.epoch !== this.#lastEpoch + 1n", to: "m.epoch <= this.#lastEpoch" },
+  { name: "fromBlock unchecked", file: "format/receiptRoot.ts", from: "if (m.fromBlock !== this.#nextFromBlock) fail", to: "if (false) fail" },
+  { name: "submit ignores genesis", file: "format/receiptRoot.ts", from: "if (m.genesis !== this.params.genesis) fail", to: "if (false) fail" },
+  { name: "empty root rule off", file: "format/receiptRoot.ts", from: "if ((m.count === 0n) !== (m.root === EMPTY_ROOT)) fail", to: "if (false) fail" },
+  { name: "submit ignores quorum", file: "format/receiptRoot.ts", from: "if (!quorum) fail", to: "if (false) fail" },
+  { name: "hook ignores pool binding", file: "consumer/hook.ts", from: "bound !== undefined && bound !== poolId", to: "false" },
+  { name: "hook ignores model", file: "consumer/hook.ts", from: "if (!models.has(d.settlement.modelHash)) fail", to: "if (false) fail" },
+  { name: "hook open to anyone", file: "consumer/hook.ts", from: "if (ctx.caller !== this.params.poolManager) fail", to: "if (false) fail" },
+  { name: "rewards no nullifier", file: "consumer/rewards.ts", from: "if (this.#spent.has(leaf)) fail", to: "if (false) fail" },
+  { name: "rewards ignore pool", file: "consumer/rewards.ts", from: "if (this.#hook.poolOf(jobId) !== this.params.poolId) fail", to: "if (false) fail" },
+  { name: "jobId is the leaf hash", file: "consumer/hook.ts", from: "jobIdOf(d.settlement)", to: "leafOf(d.settlement)" },
+  { name: "rewards window off by one", file: "consumer/rewards.ts", from: "this.#roots.lastEpoch > epoch + this.params.claimWindowEpochs", to: "this.#roots.lastEpoch >= epoch + this.params.claimWindowEpochs" },
+  { name: "latest mode accepts stale", file: "consumer/rewards.ts", from: "if (!later) fail", to: "if (false) fail" },
+  { name: "latest mode credits full amount", file: "consumer/rewards.ts", from: "credit = amount - prev.amount;", to: "credit = amount;" },
+  { name: "rewards ignore chain", file: "consumer/rewards.ts", from: "requireChain(ctx, this.params.evmChainId);\n    if (!this.#roots.verify", to: "if (!this.#roots.verify" },
+  { name: "redeem ignores parties", file: "consumer/minter.ts", from: "if (s.agent !== lock.agent || s.miner !== lock.miner) fail", to: "if (false) fail" },
+  { name: "redeem ignores freshness", file: "consumer/minter.ts", from: "if (s.settledBlock < lock.minFlopBlock) fail", to: "if (false) fail" },
+  { name: "redeem by anyone", file: "consumer/minter.ts", from: "if (ctx.caller !== lock.provider) fail", to: "if (false) fail" },
+  { name: "reclaim on a stale root", file: "consumer/minter.ts", from: "latest === 0n || epoch !== latest", to: "latest === 0n" },
+  { name: "reclaim timeout off by one", file: "consumer/minter.ts", from: "if (checkpoint < opensAt) fail", to: "if (checkpoint <= opensAt) fail" },
+  { name: "reclaim while frozen", file: "consumer/minter.ts", from: "if (this.#roots.frozen) fail", to: "if (false) fail" },
+  { name: "terminal state not enforced", file: "consumer/minter.ts", from: 'if (lock.status !== "Locked") fail', to: "if (false) fail" },
+  { name: "owed rounds up", file: "consumer/minter.ts", from: "(s.aggregateGn * lock.omerPerGnNum) / lock.omerPerGnDen", to: "(s.aggregateGn * lock.omerPerGnNum + lock.omerPerGnDen - 1n) / lock.omerPerGnDen" },
+  { name: "waterfall lender before provider", file: "consumer/waterfall.ts", from: "const toProvider = min(owed, escrow);", to: "const toProvider = min(owed, escrow - min(lenderPrincipal, escrow));" },
+  { name: "N + W drops W", file: "consumer/waterfall.ts", from: "finalizedHeight + stalenessBlocks + challengeWindowBlocks", to: "finalizedHeight + stalenessBlocks" },
+  { name: "hookData offset not checked", file: "format/hookData.ts", from: 'fail(ErrorCode.INVALID_INPUT, "non-canonical proof offset")', to: "void 0" },
 ];
 
-type Hex = `0x${string}`;
-
-/** Attacks the JSON vectors do not express directly. */
-function extraChecks(m: M): void {
-  const lbl = (s: string): Hex => m.bytesToHex(m.blake2b256(m.utf8(`mutation/${s}`)));
-  const domain = { flopGenesis: lbl("g"), evmChainId: 998n, poolId: lbl("p") };
-  const hook = `0x${lbl("h").slice(-40)}` as Hex;
-  const leaf = (ch: string, epoch: bigint, nonce: bigint, owed: bigint) => ({
-    ...domain,
-    channelId: lbl(`c/${ch}`),
-    provider: lbl(`pr/${ch}`),
-    payer: lbl(`pa/${ch}`),
-    cumulativeOwed: owed,
-    escrow: 100n,
-    nonce,
-    epoch,
-    finalizedHeight: epoch * 10n,
-    stateRoot: nonce === 0n ? m.ZERO32 : lbl(`s/${ch}/${nonce}`),
-  });
-  const code = (fn: () => unknown): string => {
-    try {
-      fn();
-    } catch (e) {
-      if (m.isReceiptRootError(e)) return e.code;
-      throw e;
-    }
-    return "OK";
-  };
-
-  // leafCount must come from the commitment: index 0 of a 5-leaf tree also verifies at count 6.
-  const five = ["a", "b", "c", "d", "e"].map((c) => leaf(c, 1n, 1n, 1n));
-  const s = m.buildSnapshot({ domain, hook, epoch: 1n, epochLength: 10n }, five);
-  const reg = new m.RootRegistry({ domain, hook, epochLength: 10n });
-  reg.accept(s.commitment, true);
-  const p0 = s.tree.proof(0, m.KECCAK256);
-  assert.equal(code(() => m.verifyReceipt(reg, { jobId: s.jobId, leaf: s.tree.leaves[0]!, proof: { ...p0, leafCount: 6n } })), "INVALID_PROOF");
-
-  // A faulty attester's rollback is visible to watchers.
-  const findings = m.auditTransition([leaf("r", 1n, 5n, 50n)], [leaf("r", 2n, 4n, 50n)]).map((f) => f.code);
-  assert.ok(findings.includes("STALE_NONCE"));
-  const s2 = m.buildSnapshot({ domain, hook, epoch: 2n, epochLength: 10n }, [leaf("x", 2n, 1n, 1n)]);
-  const forged = { ...s.commitment, blakeRoot: s2.commitment.blakeRoot };
-  assert.deepEqual(m.auditSnapshot(forged, s.tree.leaves, 10n).map((f) => f.code), ["BLAKE_ROOT_MISMATCH"]);
-  assert.equal(code(() => reg.accept({ ...s2.commitment }, false)), "UNAUTHORIZED_ATTESTER");
-
-  // Snapshot input order must not matter and a duplicate channel must be refused.
-  const rev = m.buildSnapshot({ domain, hook, epoch: 1n, epochLength: 10n }, [...five].reverse());
-  assert.equal(rev.jobId, s.jobId);
-  assert.equal(code(() => m.buildReceiptTree([five[0]!, { ...five[0]!, nonce: 2n }])), "DUPLICATE_CHANNEL");
-}
+const vectors = loadVectors();
+const fixture = JSON.parse(readFileSync(join(root, "vendor/flop-receipt-root/test/fixtures/epoch.json"), "utf8")) as {
+  msg: { root: string };
+  items: { fields: Parameters<M["settlementFromJson"]>[0] }[];
+};
 
 function battery(m: M): void {
-  replayAll(m, loadVectors());
-  extraChecks(m);
+  replayAll(m, vectors);
+  const leaves = fixture.items.map((it) => m.leafOf(m.settlementFromJson(it.fields)));
+  if (m.buildTree(leaves).root !== fixture.msg.root) throw new Error("upstream fixture root differs");
 }
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const workDir = join(root, ".mutants", `run-${process.pid}`);
-
-async function load(id: string, mutate?: Mutant): Promise<M> {
-  const dir = join(workDir, id);
+async function load(i: number, mutant?: Mutant): Promise<M> {
+  const dir = join(work, String(i));
+  rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   cpSync(join(root, "src"), join(dir, "src"), { recursive: true });
-  if (mutate !== undefined) {
-    const path = join(dir, "src", mutate.file);
-    const text = readFileSync(path, "utf8");
-    const count = text.split(mutate.find).length - 1;
-    if (count !== 1) throw new Error(`mutant ${mutate.id}: pattern found ${count} times in ${mutate.file}`);
-    writeFileSync(path, text.replace(mutate.find, mutate.replace));
+  if (mutant) {
+    const f = join(dir, "src", mutant.file);
+    const text = readFileSync(f, "utf8");
+    if (text.split(mutant.from).length !== 2) throw new Error(`mutant "${mutant.name}": pattern must occur exactly once in ${mutant.file}`);
+    writeFileSync(f, text.replace(mutant.from, mutant.to));
   }
   return (await import(pathToFileURL(join(dir, "src", "index.ts")).href)) as M;
 }
 
-afterAll(() => rmSync(workDir, { recursive: true, force: true }));
-
 describe("mutation testing", () => {
-  it("the unmutated copy passes the battery", async () => {
-    battery(await load("control"));
+  afterAll(() => rmSync(work, { recursive: true, force: true }));
+
+  it("the unmutated copy passes", async () => {
+    battery(await load(0));
   });
 
-  it.each(MUTANTS.map((mt) => [mt.id, mt] as const))("kills %s", async (_id, mutant) => {
-    const m = await load(mutant.id, mutant);
-    expect(() => battery(m), `mutant ${mutant.id} survived`).toThrow();
-  });
+  for (const [i, mu] of MUTANTS.entries()) {
+    it(`kills: ${mu.name}`, async () => {
+      const m = await load(i + 1, mu);
+      expect(() => battery(m)).toThrow();
+    });
+  }
 });

@@ -1,6 +1,8 @@
 import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { serializeVectors } from "./vectors.js";
 
-const path = new URL("../vectors/receipt-root-v1.json", import.meta.url);
-writeFileSync(path, serializeVectors());
-process.stdout.write(`wrote ${path.pathname}\n`);
+const out = join(dirname(fileURLToPath(import.meta.url)), "..", "vectors", "if-d8-v2.json");
+writeFileSync(out, serializeVectors());
+console.log(`wrote ${out}`);

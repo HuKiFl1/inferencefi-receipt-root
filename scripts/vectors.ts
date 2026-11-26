@@ -1,140 +1,133 @@
 /**
- * Deterministic test vectors for the IF-D8 proposal. Scenario expectations are
- * written out by hand below; `buildVectors()` throws if the reference models
- * disagree with any of them, so the JSON is a specification, not a snapshot.
- *
- * All identifiers are synthetic labels hashed with blake2b-256 or keccak-256.
- * None is a real chain, account, key or address.
+ * Deterministic IF-D8 vectors in the flop-receipt-root v0.3.2 format.
+ * Every expected outcome below is written by hand; `buildVectors` throws if a
+ * model disagrees, so the JSON is a specification, not a recording.
+ * All identifiers are synthetic labels.
  */
 import {
-  AgentRewardsModel,
-  BLAKE2B256,
+  AgentRewardsConsumerModel,
+  type BuiltEpoch,
+  type CallContext,
+  ErrorCode,
+  FlopReceiptRootModel,
   type Hex,
-  KECCAK256,
+  LEAF_TYPE,
+  LEAF_TYPEHASH,
   type LockInput,
-  type MerkleProof,
+  MAX_PROOF,
   OMER_UNIT,
-  OmerMinterModel,
-  Prefix,
-  type ReceiptClaim,
-  type ReceiptDomain,
-  type ReceiptLeaf,
-  RootRegistry,
-  type RootCommitment,
-  type Snapshot,
+  OmerMinterConsumerModel,
+  ROOT_TYPE,
+  ROOT_TYPEHASH,
+  ReceiptJobHookModel,
+  type RootMsg,
+  type Settled,
+  type Settlement,
+  type UnservedAttestor,
+  type UnservedFacts,
   U64_MAX,
   U128_MAX,
+  UNSERVED_ATTESTOR_STUB,
   ZERO32,
-  blake2b256,
-  buildSnapshot,
+  buildEpoch,
+  buildTree,
   bytesToHex,
-  checkpointOf,
-  encodeLeaf,
+  decodeHookData,
+  digest712,
+  domainSeparator,
+  encodeHookData,
+  encodeSettlement,
+  fail,
+  hexToBytes,
   isReceiptRootError,
-  jobIdOf,
   keccak256,
-  leafHash,
-  nodeHash,
-  nullifierOf,
-  reclaimEligible,
+  jobIdOf,
+  JOB_ID_TAG,
+  JOB_ID_TAG_STRING,
+  leafOf,
+  pairHash,
+  processProof,
+  proofFor,
+  settlementToJson,
   utf8,
-  waterfall,
-  EMPTY_BLAKE_ROOT,
-  EMPTY_KECCAK_ROOT,
+  verifyRawProof,
 } from "../src/index.js";
 
-export const label = (s: string): Hex => bytesToHex(blake2b256(utf8(`inferencefi-receipt-root/test/${s}`)));
-const address = (s: string): Hex => `0x${bytesToHex(keccak256(utf8(`inferencefi-receipt-root/test/${s}`))).slice(-40)}`;
-const omer = (n: bigint): bigint => n * OMER_UNIT;
+export const label = (s: string): Hex => bytesToHex(keccak256(utf8(`inferencefi-receipt-root/v2/test/${s}`)));
+export const address = (s: string): Hex => `0x${label(s).slice(-40)}`;
 
-export const DOMAIN: ReceiptDomain = {
-  flopGenesis: label("flop-genesis"),
-  evmChainId: 998n,
-  poolId: bytesToHex(keccak256(utf8("inferencefi-receipt-root/test/pool"))),
-};
-export const HOOK: Hex = address("hook");
-export const EPOCH_LENGTH = 1_000n;
+export const GENESIS = label("flop-genesis");
+export const EVM_CHAIN_ID = 998n;
+export const ROOTS_ADDRESS = address("flop-receipt-root");
+export const START_BLOCK = 1_000n;
+export const POOL_A = label("pool/A");
+export const POOL_B = label("pool/B");
+export const MODEL_X = label("model/X");
+export const MODEL_Y = label("model/Y");
+export const MODEL_Z = label("model/Z");
+export const POOL_MANAGER = address("pool-manager");
+export const N = 100n;
+export const W = 20n;
+export const CLAIM_WINDOW = 1n;
 
-type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
-
-/** bigint becomes a decimal string, so uint128 values survive any JSON parser. */
-function toJson(value: unknown): Json {
-  if (typeof value === "bigint") return value.toString(10);
-  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
-  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(toJson);
-  if (typeof value === "object") {
-    const out: { [k: string]: Json } = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) if (v !== undefined) out[k] = toJson(v);
-    return out;
-  }
-  throw new TypeError(`cannot serialize ${typeof value}`);
-}
-
-interface LeafSpec {
+export interface SettleOpts {
   readonly ch: string;
-  readonly nonce: bigint;
-  readonly owed: bigint;
-  readonly escrow: bigint;
-  readonly height: bigint;
-  readonly provider?: string;
-  readonly payer?: string;
+  readonly block: bigint;
+  readonly idx?: bigint;
+  readonly agent?: string;
+  readonly miner?: string;
+  readonly model?: Hex;
+  readonly gn?: bigint;
+  readonly paid?: bigint;
+  readonly burned?: bigint;
+  readonly escrow?: bigint;
 }
 
-function leafOf(s: LeafSpec, epoch: bigint, domain: ReceiptDomain = DOMAIN): ReceiptLeaf {
+export function settle(o: SettleOpts): Settlement {
   return {
-    ...domain,
-    channelId: label(`channel/${s.ch}`),
-    provider: label(`provider/${s.provider ?? s.ch}`),
-    payer: label(`payer/${s.payer ?? s.ch}`),
-    cumulativeOwed: s.owed,
-    escrow: s.escrow,
-    nonce: s.nonce,
-    epoch,
-    finalizedHeight: s.height,
-    stateRoot: s.nonce === 0n ? ZERO32 : label(`state/${s.ch}/${s.nonce}/${s.owed}`),
+    genesis: GENESIS,
+    channelId: label(`channel/${o.ch}`),
+    settledBlock: o.block,
+    settledBlockHash: label(`block/${o.block}`),
+    eventIndex: o.idx ?? 0n,
+    agent: label(`agent/${o.agent ?? o.ch}`),
+    miner: label(`miner/${o.miner ?? o.ch}`),
+    modelHash: o.model ?? MODEL_X,
+    aggregateGn: o.gn ?? 1_000n,
+    minerPaid: o.paid ?? 100n,
+    burned: o.burned ?? 0n,
+    escrow: o.escrow ?? 10_000n,
   };
 }
 
-function snapshot(epoch: bigint, specs: readonly LeafSpec[]): Snapshot {
-  return buildSnapshot({ domain: DOMAIN, hook: HOOK, epoch, epochLength: EPOCH_LENGTH }, specs.map((s) => leafOf(s, epoch)));
+// ---------------------------------------------------------------- JSON helpers
+
+type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
+
+function toJson(v: unknown): Json {
+  if (typeof v === "bigint") return v.toString();
+  if (typeof v === "number") {
+    if (!Number.isSafeInteger(v)) throw new Error(`cannot serialize number ${v}`);
+    return v;
+  }
+  if (v === undefined || v === null) return null;
+  if (typeof v === "boolean" || typeof v === "string") return v;
+  if (Array.isArray(v)) return v.map(toJson);
+  if (typeof v === "object") {
+    const out: { [k: string]: Json } = {};
+    for (const [k, x] of Object.entries(v as object)) if (x !== undefined) out[k] = toJson(x);
+    return out;
+  }
+  throw new Error(`cannot serialize ${typeof v}`);
 }
 
-function claimFor(snap: Snapshot, ch: string): ReceiptClaim {
-  const i = snap.tree.indexOf(label(`channel/${ch}`));
-  if (i < 0) throw new Error(`channel ${ch} not in epoch ${snap.commitment.epoch}`);
-  return { jobId: snap.jobId, leaf: snap.tree.leaves[i]!, proof: snap.tree.proof(i, KECCAK256) };
+function expectEqual(what: string, got: unknown, want: unknown): void {
+  const g = JSON.stringify(toJson(got));
+  const w = JSON.stringify(toJson(want));
+  if (g !== w) throw new Error(`vector expectation failed: ${what}\n  got:  ${g}\n  want: ${w}`);
 }
 
-const proofJson = (p: MerkleProof) => ({ index: p.index, leafCount: p.leafCount, siblings: [...p.siblings] });
-const leafJson = (l: ReceiptLeaf) => ({
-  flopGenesis: l.flopGenesis,
-  evmChainId: l.evmChainId,
-  poolId: l.poolId,
-  channelId: l.channelId,
-  provider: l.provider,
-  payer: l.payer,
-  cumulativeOwed: l.cumulativeOwed,
-  escrow: l.escrow,
-  nonce: l.nonce,
-  epoch: l.epoch,
-  finalizedHeight: l.finalizedHeight,
-  stateRoot: l.stateRoot,
-});
-const commitmentJson = (c: RootCommitment) => ({
-  flopGenesis: c.flopGenesis,
-  evmChainId: c.evmChainId,
-  poolId: c.poolId,
-  hook: c.hook,
-  epoch: c.epoch,
-  checkpointHeight: c.checkpointHeight,
-  leafCount: c.leafCount,
-  keccakRoot: c.keccakRoot,
-  blakeRoot: c.blakeRoot,
-});
-
-/** Runs `fn` and returns "OK" or the typed error code. */
-function outcome(fn: () => unknown): string {
+function outcome(fn: () => void): string {
   try {
     fn();
     return "OK";
@@ -144,470 +137,597 @@ function outcome(fn: () => unknown): string {
   }
 }
 
-function expectEqual(what: string, actual: unknown, expected: unknown): void {
-  if (JSON.stringify(toJson(actual)) !== JSON.stringify(toJson(expected))) {
-    throw new Error(`vector ${what}: model gave ${JSON.stringify(toJson(actual))}, spec says ${JSON.stringify(toJson(expected))}`);
-  }
+/** Solidity error signatures, so Foundry can compare the 4-byte selector of a revert. */
+const ERROR_SIGNATURES: Record<string, string> = {
+  IsFrozen: "IsFrozen()",
+  WrongGenesis: "WrongGenesis(bytes32)",
+  WrongEpoch: "WrongEpoch(uint64,uint64)",
+  WrongFromBlock: "WrongFromBlock(uint64,uint64)",
+  BadRange: "BadRange(uint64,uint64)",
+  EmptyRoot: "EmptyRoot(uint32)",
+  BelowThreshold: "BelowThreshold(uint256,uint256)",
+  NotEquivocation: "NotEquivocation()",
+};
+export function selectorOf(code: string): Hex {
+  if (code === "OK") return "0x00000000";
+  const sig = ERROR_SIGNATURES[code] ?? `${code}()`;
+  return bytesToHex(keccak256(utf8(sig)).subarray(0, 4));
 }
 
-// ---------------------------------------------------------------- primitives
+const flip = (h: Hex): Hex => `${h.slice(0, -1)}${h.endsWith("0") ? "1" : "0"}` as Hex;
 
-function primitives() {
-  const inputs: Hex[] = ["0x", bytesToHex(utf8("abc")), bytesToHex(new Uint8Array(200).map((_, i) => i & 0xff))];
-  const known = {
-    keccak256: {
-      "0x": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
-      "0x616263": "0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45",
-    },
-    blake2b256: {
-      "0x": "0x0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8",
-      "0x616263": "0xbddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
-    },
-  } as const;
-  const hashes = inputs.flatMap((input) =>
-    [KECCAK256, BLAKE2B256].map((h) => {
-      const output = bytesToHex(h(Uint8Array.from(Buffer.from(input.slice(2), "hex"))));
-      const ref = (known[h.id] as Record<string, string>)[input];
-      if (ref !== undefined) expectEqual(`hash ${h.id}(${input})`, output, ref);
-      return { fn: h.id, input, output };
-    }),
-  );
-  return { hashes };
-}
+// ---------------------------------------------------------------- static sections
 
-// ---------------------------------------------------------------- leaves
-
-function leafEncodings() {
-  const boundary: ReceiptLeaf = {
-    flopGenesis: `0x${"ff".repeat(32)}`,
-    evmChainId: U64_MAX,
-    poolId: `0x${"ff".repeat(32)}`,
-    channelId: `0x${"ff".repeat(32)}`,
-    provider: `0x${"ff".repeat(31)}fe`,
-    payer: `0x${"00".repeat(31)}01`,
-    cumulativeOwed: U128_MAX,
+function leafVectors() {
+  const boundary: Settlement = {
+    ...settle({ ch: "boundary", block: U64_MAX, idx: (1n << 32n) - 1n }),
+    aggregateGn: U128_MAX,
+    minerPaid: U128_MAX,
+    burned: U128_MAX,
     escrow: U128_MAX,
-    nonce: U64_MAX,
-    epoch: U64_MAX,
-    finalizedHeight: U64_MAX,
-    stateRoot: `0x${"ff".repeat(32)}`,
   };
-  const cases: { name: string; leaf: ReceiptLeaf }[] = [
-    { name: "opening-state", leaf: leafOf({ ch: "enc-0", nonce: 0n, owed: 0n, escrow: omer(100n), height: 5_000n }, 5n) },
-    { name: "served", leaf: leafOf({ ch: "enc-1", nonce: 7n, owed: omer(3n) + 1n, escrow: omer(10n), height: 5_432n }, 5n) },
-    { name: "overrun", leaf: leafOf({ ch: "enc-2", nonce: 2n, owed: omer(12n), escrow: omer(10n), height: 5_999n }, 5n) },
-    { name: "zero-escrow", leaf: leafOf({ ch: "enc-3", nonce: 1n, owed: 1n, escrow: 0n, height: 5_001n }, 5n) },
-    { name: "uint-boundaries", leaf: boundary },
+  const cases: { name: string; s: Settlement }[] = [
+    { name: "typical", s: settle({ ch: "enc-1", block: 1_234n, idx: 3n, gn: 198_487n, paid: 42_500_000_000_000_000n, escrow: 50_000_000_000_000_000n }) },
+    { name: "zero-amounts", s: settle({ ch: "enc-2", block: 0n, gn: 0n, paid: 0n, escrow: 0n }) },
+    { name: "force-settled-with-burn", s: settle({ ch: "enc-3", block: 7n, paid: 10n, burned: 90n, escrow: 100n }) },
+    { name: "uint-boundaries", s: boundary },
   ];
-  return cases.map(({ name, leaf }) => ({
-    name,
-    leaf: leafJson(leaf),
-    encoded: bytesToHex(encodeLeaf(leaf)),
-    keccakLeafHash: leafHash(leaf, KECCAK256),
-    blakeLeafHash: leafHash(leaf, BLAKE2B256),
-    nullifier: nullifierOf(leaf),
-  }));
+  return cases.map((c) => ({ name: c.name, settlement: settlementToJson(c.s), encoding: bytesToHex(encodeSettlement(c.s)), leaf: leafOf(c.s) }));
 }
 
-// ---------------------------------------------------------------- trees and proofs
-
-const TREE_SIZES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 17] as const;
-
-function treeSnapshot(n: number): Snapshot {
-  const epoch = 100n + BigInt(n);
-  const cp = checkpointOf(epoch, EPOCH_LENGTH);
-  const specs: LeafSpec[] = Array.from({ length: n }, (_, i) => {
-    const nonce = BigInt(i % 4);
-    return {
-      ch: `tree-${n}-${i}`,
-      provider: `p${i % 3}`,
-      payer: `a${i % 5}`,
-      nonce,
-      owed: nonce === 0n ? 0n : omer(BigInt(i + 1)) + BigInt(n),
-      escrow: omer(BigInt(10 + i)),
-      height: cp - BigInt((i * 37) % 900),
-    };
-  });
-  return snapshot(epoch, specs);
-}
-
-function trees() {
-  return TREE_SIZES.map((n) => {
-    const s = treeSnapshot(n);
+function treeVectors() {
+  return [1, 2, 3, 4, 5, 7, 8, 9, 17].map((n) => {
+    const settlements = Array.from({ length: n }, (_, i) => settle({ ch: `tree-${n}-${i}`, block: 1_000n + BigInt(i), gn: BigInt(i + 1) }));
+    const leaves = settlements.map(leafOf);
+    const tree = buildTree(leaves);
     return {
       name: `n=${n}`,
-      commitment: commitmentJson(s.commitment),
-      jobId: s.jobId,
-      leaves: s.tree.leaves.map(leafJson),
-      keccakLeafHashes: [...s.tree.leafHashes.keccak256],
-      blakeLeafHashes: [...s.tree.leafHashes.blake2b256],
-      proofs: s.tree.leaves.map((_, i) => ({
-        index: BigInt(i),
-        leafCount: BigInt(n),
-        keccakSiblings: [...s.tree.proof(i, KECCAK256).siblings],
-        blakeSiblings: [...s.tree.proof(i, BLAKE2B256).siblings],
-      })),
+      settlements: settlements.map(settlementToJson),
+      leaves,
+      sortedLeaves: tree.layers[0],
+      root: tree.root,
+      proofs: leaves.map((l) => proofFor(tree, l)),
     };
   });
+}
+
+function proofCases() {
+  const leaves = Array.from({ length: 7 }, (_, i) => leafOf(settle({ ch: `pc-${i}`, block: 1_000n + BigInt(i) })));
+  const tree = buildTree(leaves);
+  const other = buildTree(Array.from({ length: 7 }, (_, i) => leafOf(settle({ ch: `pc-other-${i}`, block: 1_000n + BigInt(i) }))));
+  const sorted = tree.layers[0]!;
+  const l = sorted[2]!;
+  const p = proofFor(tree, l);
+  const single = buildTree([leaves[0]!]);
+  const node = pairHash(sorted[0]!, sorted[1]!);
+  const nodeProof = proofFor(tree, sorted[0]!).slice(1);
+  const preimage = `0x${sorted[0]!.slice(2)}${sorted[1]!.slice(2)}` as Hex;
+  const preimageDoubleHashed = bytesToHex(keccak256(keccak256(hexToBytes(preimage))));
+  const cases = [
+    { name: "valid", root: tree.root, leaf: l, proof: p, expect: true },
+    { name: "forged-sibling", root: tree.root, leaf: l, proof: [flip(p[0]!), ...p.slice(1)], expect: false },
+    { name: "truncated", root: tree.root, leaf: l, proof: p.slice(0, -1), expect: false },
+    { name: "extended", root: tree.root, leaf: l, proof: [...p, leaves[0]!], expect: false },
+    { name: "reordered", root: tree.root, leaf: l, proof: [p[1]!, p[0]!, ...p.slice(2)], expect: false },
+    { name: "other-tree-root", root: other.root, leaf: l, proof: p, expect: false },
+    { name: "leaf-not-in-tree", root: tree.root, leaf: other.layers[0]![2]!, proof: p, expect: false },
+    { name: "empty-proof-multi-leaf", root: tree.root, leaf: l, proof: [], expect: false },
+    { name: "single-leaf-empty-proof", root: single.root, leaf: leaves[0]!, proof: [], expect: true },
+    // A 64-byte inner node passes the RAW hash check with the rest of the path.
+    // FlopReceiptRoot.verify never takes a raw hash: it computes leafOf(settlement).
+    { name: "inner-node-as-raw-leaf", root: tree.root, leaf: node, proof: nodeProof, expect: true },
+    // Treating the node's 64-byte preimage as leaf data and double-hashing it, as leafOf does, misses the root.
+    { name: "inner-node-preimage-double-hashed", root: tree.root, leaf: preimageDoubleHashed, proof: nodeProof, expect: false },
+  ];
+  for (const c of cases) expectEqual(`proof case ${c.name}`, verifyRawProof(c.root, c.leaf, c.proof), c.expect);
+  return { tree: { leaves, root: tree.root }, nodeAsLeaf: { left: sorted[0]!, right: sorted[1]!, node, preimage }, cases };
 }
 
 /**
- * Proofs a correct verifier must reject, all against the keccak root of the n=7
- * tree. Each uses the committed `leafCount` (7) unless the case is about the
- * count itself. A verifier that lets the caller pick `leafCount` can be fooled
- * (an internal node verifies as a leaf of a 4-leaf tree), which is why the
- * count is bound into the jobId and read from the commitment.
+ * FlopReceiptRoot.verify against quorum-signed roots the tree builder would
+ * never produce. Each case is a fresh contract whose first epoch is `msg`.
  */
-function negativeProofs() {
-  const s = treeSnapshot(7);
-  const root = s.commitment.keccakRoot;
-  const hashes = s.tree.leafHashes.keccak256;
-  const p = (i: number) => s.tree.proof(i, KECCAK256);
-  const other = treeSnapshot(5);
-  const internal = nodeHash(KECCAK256, hashes[0]!, hashes[1]!);
-  const cases: { name: string; leafHash: Hex; index: bigint; leafCount: bigint; siblings: readonly Hex[]; root: Hex }[] = [
-    { name: "wrong-index", leafHash: hashes[2]!, index: 3n, leafCount: 7n, siblings: p(2).siblings, root },
-    { name: "leaf-count-plus-one", leafHash: hashes[6]!, index: 6n, leafCount: 8n, siblings: p(6).siblings, root },
-    { name: "leaf-count-minus-one", leafHash: hashes[5]!, index: 5n, leafCount: 6n, siblings: p(5).siblings, root },
-    { name: "extra-sibling", leafHash: hashes[1]!, index: 1n, leafCount: 7n, siblings: [...p(1).siblings, hashes[0]!], root },
-    { name: "missing-sibling", leafHash: hashes[1]!, index: 1n, leafCount: 7n, siblings: p(1).siblings.slice(0, -1), root },
-    { name: "swapped-siblings", leafHash: hashes[4]!, index: 4n, leafCount: 7n, siblings: [p(4).siblings[1]!, p(4).siblings[0]!, ...p(4).siblings.slice(2)], root },
-    { name: "promoted-node-given-a-sibling", leafHash: hashes[6]!, index: 6n, leafCount: 7n, siblings: [hashes[5]!, ...p(6).siblings], root },
-    { name: "internal-node-as-leaf", leafHash: internal, index: 0n, leafCount: 7n, siblings: p(0).siblings.slice(1), root },
-    { name: "index-equals-leaf-count", leafHash: hashes[6]!, index: 7n, leafCount: 7n, siblings: p(6).siblings, root },
-    // Leaf 6 is promoted at level 0, so index 6 + 8 walks the same path. Only `index < leafCount` stops it.
-    { name: "index-aliases-past-leaf-count", leafHash: hashes[6]!, index: 14n, leafCount: 7n, siblings: p(6).siblings, root },
-    { name: "leaf-from-other-tree", leafHash: other.tree.leafHashes.keccak256[0]!, index: 0n, leafCount: 7n, siblings: p(0).siblings, root },
-    { name: "blake-siblings-on-keccak-root", leafHash: hashes[3]!, index: 3n, leafCount: 7n, siblings: s.tree.proof(3, BLAKE2B256).siblings, root },
-    { name: "blake-leaf-on-keccak-root", leafHash: s.tree.leafHashes.blake2b256[3]!, index: 3n, leafCount: 7n, siblings: p(3).siblings, root },
-    { name: "empty-tree", leafHash: hashes[0]!, index: 0n, leafCount: 0n, siblings: [], root: EMPTY_KECCAK_ROOT },
+function verifyCases() {
+  const base = { genesis: GENESIS, epoch: 1n, fromBlock: 5_000n, toBlock: 5_999n, toBlockHash: label("block/5999") };
+  const sib = (n: number) => Array.from({ length: n }, (_, i) => label(`sibling/${i}`));
+  const at = (block: bigint, o: Partial<Settlement> = {}) => ({ ...settle({ ch: `verify-${block}`, block }), ...o });
+  const one = (name: string, x: Settlement, proof: readonly Hex[], expect: boolean, o: { verifyEpoch?: bigint; count?: bigint; root?: Hex; verifyProof?: readonly Hex[] } = {}) => {
+    const msg: RootMsg = { ...base, count: o.count ?? 1n, root: o.root ?? processProof(leafOf(x), proof) };
+    return { name, msg, epoch: o.verifyEpoch ?? 1n, settlement: x, proof: o.verifyProof ?? proof, expect };
+  };
+  const pairEdge = buildTree([leafOf(at(5_000n)), leafOf(at(5_999n))]);
+  const cases = [
+    one("proof of exactly MAX_PROOF siblings", at(5_100n), sib(MAX_PROOF), true),
+    one("proof of MAX_PROOF + 1 siblings under a signed root", at(5_100n), sib(MAX_PROOF + 1), false),
+    one("leaf of another genesis inside a signed root", at(5_100n, { genesis: label("other-genesis") }), sib(2), false),
+    one("settled one block before the epoch", at(4_999n), sib(2), false),
+    one("settled one block after the epoch", at(6_000n), sib(2), false),
+    one("settled on the first block", at(5_000n), proofFor(pairEdge, leafOf(at(5_000n))), true, { count: 2n, root: pairEdge.root }),
+    one("settled on the last block", at(5_999n), proofFor(pairEdge, leafOf(at(5_999n))), true, { count: 2n, root: pairEdge.root }),
+    one("epoch that was never submitted", at(5_100n), sib(2), false, { verifyEpoch: 2n }),
+    one("empty epoch", at(5_100n), [], false, { count: 0n, root: ZERO32 }),
   ];
-  return cases.map((c) => ({ ...c, siblings: [...c.siblings] }));
+  for (const c of cases) {
+    const m = new FlopReceiptRootModel({ genesis: GENESIS, startBlock: base.fromBlock, chainId: EVM_CHAIN_ID, verifyingContract: ROOTS_ADDRESS });
+    m.submit(c.msg, true);
+    expectEqual(`verify case ${c.name}`, m.verify(c.epoch, c.settlement, c.proof), c.expect);
+  }
+  return cases.map((c) => ({ ...c, settlement: settlementToJson(c.settlement), digest: digest712(c.msg, EVM_CHAIN_ID, ROOTS_ADDRESS) }));
 }
 
-// ---------------------------------------------------------------- jobId / nullifier domain separation
+/** One (epoch, settlement, proof) has exactly one accepted hookData. */
+function hookDataCases() {
+  const d = { epoch: 7n, settlement: settle({ ch: "hd", block: 1_234n }), proof: [label("p/0"), label("p/1")] };
+  const ok = encodeHookData(d);
+  const body = ok.slice(2);
+  const word = (i: number) => body.slice(64 * i, 64 * (i + 1));
+  const words = Array.from({ length: body.length / 64 }, (_, i) => word(i));
+  const join = (ws: string[]): Hex => `0x${ws.join("")}`;
+  const shifted = [...words.slice(0, 13), (480).toString(16).padStart(64, "0"), "00".repeat(32), ...words.slice(14)];
+  const dirty = (i: number) => words.map((w, j) => (j === i ? `01${w.slice(2)}` : w));
+  const cases = [
+    { name: "canonical", hex: ok, expect: "OK" },
+    { name: "trailing zero word", hex: join([...words, "00".repeat(32)]), expect: "BadHookData" },
+    { name: "proof offset 480 with a padding word", hex: join(shifted), expect: "BadHookData" },
+    { name: "proof offset 480, nothing else changed", hex: join([...words.slice(0, 13), (480).toString(16).padStart(64, "0"), ...words.slice(14)]), expect: "BadHookData" },
+    { name: "dirty high bits in epoch", hex: join(dirty(0)), expect: "BadHookData" },
+    { name: "dirty high bits in settledBlock", hex: join(dirty(3)), expect: "BadHookData" },
+    { name: "proof length larger than the data", hex: join([...words.slice(0, 14), (3).toString(16).padStart(64, "0"), ...words.slice(15)]), expect: "BadHookData" },
+    { name: "cut inside the head", hex: join(words.slice(0, 10)), expect: "BadHookData" },
+  ];
+  for (const c of cases) expectEqual(`hookData case ${c.name}`, outcome(() => decodeHookData(c.hex)), c.expect);
+  return { decoded: { ...d, settlement: settlementToJson(d.settlement) }, cases: cases.map((c) => ({ ...c, selector: selectorOf(c.expect) })) };
+}
+
+// ---------------------------------------------------------------- scenario
+
+export class MockUnservedAttestor implements UnservedAttestor {
+  readonly #facts = new Map<string, UnservedFacts>();
+  set(channelId: Hex, epoch: bigint, f: UnservedFacts): void {
+    this.#facts.set(`${channelId}:${epoch}`, f);
+  }
+  verifyUnserved(genesis: Hex, channelId: Hex, epoch: bigint): UnservedFacts {
+    const f = this.#facts.get(`${channelId}:${epoch}`);
+    if (genesis !== GENESIS || f === undefined) fail(ErrorCode.AttestationMismatch, "no attestation for this channel and epoch");
+    return f;
+  }
+}
+
+type RewardsKey = "sum" | "latest";
+type MinterKey = "stub" | "attested";
+/** [owed, toProvider, toLender, toPayer, overrun, lenderShortfall] */
+type PayoutTuple = readonly [bigint, bigint, bigint, bigint, bigint, bigint];
+const tuple = (s: Settled): PayoutTuple => [s.owed, s.toProvider, s.toLender, s.toPayer, s.overrun, s.lenderShortfall];
+
+type Step =
+  | { op: "submit"; note: string; msg: RootMsg; quorum: boolean; expect: string }
+  | { op: "freeze"; note: string; msgA: RootMsg; msgB: RootMsg; expect: string }
+  | { op: "tag"; note: string; chainId: bigint; caller: Hex; poolId: Hex; epoch: bigint; settlement: Settlement; proof: readonly Hex[]; expect: string; jobId?: Hex; rawHookData?: Hex }
+  | { op: "claim"; note: string; chainId: bigint; consumer: RewardsKey; epoch: bigint; settlement: Settlement; proof: readonly Hex[]; expect: string; credit?: bigint | undefined; channelEpochTotal?: bigint | undefined }
+  | { op: "open"; note: string; chainId: bigint; consumer: MinterKey; lock: LockInput; expect: string }
+  | { op: "setUnserved"; note: string; channelId: Hex; epoch: bigint; lastFinalizedHeight: bigint; owed: bigint }
+  | { op: "redeem"; note: string; chainId: bigint; caller: Hex; consumer: MinterKey; lockId: Hex; epoch: bigint; settlement: Settlement; proof: readonly Hex[]; expect: string; payouts?: PayoutTuple }
+  | { op: "reclaim"; note: string; chainId: bigint; caller: Hex; consumer: MinterKey; lockId: Hex; epoch: bigint; attestation: Hex; expect: string; payouts?: PayoutTuple };
+
+const O = (n: bigint) => n * OMER_UNIT;
+const GN_PRICE = 10n ** 15n; // 0.001 OMER per G_n
+
+function lock(name: string, ch: string, o: Partial<LockInput> = {}): LockInput {
+  return {
+    lockId: label(`lock/${name}`),
+    channelId: label(`channel/${ch}`),
+    agent: label(`agent/${ch}`),
+    miner: label(`miner/${ch}`),
+    modelHash: MODEL_X,
+    payer: address(`payer/${ch}`),
+    provider: address(`provider/${ch}`),
+    lender: address(`lender/${ch}`),
+    lenderPrincipal: O(3n),
+    payerDeposit: O(1n),
+    omerPerGnNum: GN_PRICE,
+    omerPerGnDen: 1n,
+    minFlopBlock: START_BLOCK,
+    ...o,
+  };
+}
+
+function scenario() {
+  // Epoch 1: 1000..1999. Epoch 2: 2000..2999. Epoch 3: 3000..3099, empty. Epoch 4: 3100..4999.
+  const s = {
+    a1: settle({ ch: "C1", block: 1_100n, idx: 0n, paid: 100n }),
+    a2: settle({ ch: "C1", block: 1_500n, idx: 2n, paid: 160n }),
+    b1: settle({ ch: "C2", block: 1_200n, idx: 1n, paid: 50n }),
+    poolB: settle({ ch: "C3", block: 1_300n, model: MODEL_Y, paid: 70n }),
+    unpooled: settle({ ch: "C4", block: 1_400n, model: MODEL_Z }),
+    served: settle({ ch: "K1", block: 1_700n, gn: 2_000n }),
+    early: settle({ ch: "K5", block: 1_250n }),
+    zeroGn: settle({ ch: "K6", block: 1_260n, gn: 0n }),
+    overrun: settle({ ch: "K7", block: 1_800n, gn: 9_000n }),
+    c1e2: settle({ ch: "C1", block: 2_100n, paid: 200n }),
+    top1: settle({ ch: "C6", block: 2_500n, idx: 3n, paid: 300n }),
+    top2: settle({ ch: "C6", block: 2_500n, idx: 7n, paid: 450n }),
+    dec1: settle({ ch: "C7", block: 2_600n, paid: 500n }),
+    dec2: settle({ ch: "C7", block: 2_700n, paid: 400n }),
+    ag1: settle({ ch: "C8", block: 2_800n, paid: 10n }),
+    ag2: settle({ ch: "C8", block: 2_900n, agent: "C8-other", paid: 20n }),
+    late: settle({ ch: "K3", block: 3_200n, gn: 500n }),
+    refunded: settle({ ch: "K4", block: 3_300n, gn: 500n }),
+    k9: settle({ ch: "K9", block: 3_400n, gn: 500n }),
+    k10: settle({ ch: "K10", block: 3_500n, gn: 1_000n }),
+  };
+  const e1 = buildEpoch({ genesis: GENESIS, epoch: 1n, fromBlock: 1_000n, toBlock: 1_999n, toBlockHash: label("block/1999"), settlements: [s.a1, s.a2, s.b1, s.poolB, s.unpooled, s.served, s.early, s.zeroGn, s.overrun] });
+  const e2 = buildEpoch({ genesis: GENESIS, epoch: 2n, fromBlock: 2_000n, toBlock: 2_999n, toBlockHash: label("block/2999"), settlements: [s.c1e2, s.top1, s.top2, s.dec1, s.dec2, s.ag1, s.ag2] });
+  const e3 = buildEpoch({ genesis: GENESIS, epoch: 3n, fromBlock: 3_000n, toBlock: 3_099n, toBlockHash: label("block/3099"), settlements: [] });
+  const e4 = buildEpoch({ genesis: GENESIS, epoch: 4n, fromBlock: 3_100n, toBlock: 4_999n, toBlockHash: label("block/4999"), settlements: [s.late, s.refunded, s.k9, s.k10] });
+  const pf = (e: BuiltEpoch, x: Settlement): readonly Hex[] => e.items.find((i) => i.leaf === leafOf(x))!.proof;
+  const forged = (e: BuiltEpoch, x: Settlement): Hex[] => [flip(pf(e, x)[0]!), ...pf(e, x).slice(1)];
+
+  const MGR = POOL_MANAGER;
+  type TagOpts = { epoch?: bigint; proof?: readonly Hex[]; settlement?: Settlement; caller?: Hex; chainId?: bigint; rawHookData?: Hex };
+  const tag = (note: string, poolId: Hex, e: BuiltEpoch, x: Settlement, expect: string, o: TagOpts = {}): Step => ({
+    op: "tag",
+    note,
+    chainId: o.chainId ?? EVM_CHAIN_ID,
+    caller: o.caller ?? MGR,
+    poolId,
+    epoch: o.epoch ?? e.msg.epoch,
+    settlement: o.settlement ?? x,
+    proof: o.proof ?? pf(e, x),
+    expect,
+    ...(expect === "OK" ? { jobId: jobIdOf(o.settlement ?? x) } : {}),
+    ...(o.rawHookData ? { rawHookData: o.rawHookData } : {}),
+  });
+  type ClaimOpts = { epoch?: bigint; chainId?: bigint };
+  const claim = (note: string, consumer: RewardsKey, e: BuiltEpoch, x: Settlement, expect: string, credit?: bigint, total?: bigint, o: ClaimOpts = {}): Step => ({
+    op: "claim",
+    note,
+    chainId: o.chainId ?? EVM_CHAIN_ID,
+    consumer,
+    epoch: o.epoch ?? e.msg.epoch,
+    settlement: x,
+    proof: pf(e, x),
+    expect,
+    ...(expect === "OK" ? { credit, channelEpochTotal: total } : {}),
+  });
+  type RedeemOpts = { caller?: Hex; proof?: readonly Hex[] };
+  const redeem = (note: string, l: LockInput, e: BuiltEpoch, x: Settlement, expect: string, payouts?: PayoutTuple, o: RedeemOpts = {}): Step => ({
+    op: "redeem",
+    note,
+    chainId: EVM_CHAIN_ID,
+    caller: o.caller ?? l.provider,
+    consumer: "attested",
+    lockId: l.lockId,
+    epoch: e.msg.epoch,
+    settlement: x,
+    proof: o.proof ?? pf(e, x),
+    expect,
+    ...(payouts ? { payouts } : {}),
+  });
+  const reclaim = (note: string, consumer: MinterKey, l: LockInput, epoch: bigint, expect: string, payouts?: PayoutTuple, caller: Hex = l.lender): Step => ({
+    op: "reclaim",
+    note,
+    chainId: EVM_CHAIN_ID,
+    caller,
+    consumer,
+    lockId: l.lockId,
+    epoch,
+    attestation: "0x",
+    expect,
+    ...(payouts ? { payouts } : {}),
+  });
+
+  const K1 = lock("K1", "K1");
+  const K2 = lock("K2", "K2");
+  const K2s = lock("K2-stub", "K2");
+  const K3 = lock("K3", "K3");
+  const K4 = lock("K4", "K4");
+  const K5 = lock("K5", "K5", { minFlopBlock: 1_600n });
+  const K6 = lock("K6", "K6");
+  const K7 = lock("K7", "K7");
+  const K8 = lock("K8", "C1", { modelHash: MODEL_Y });
+  const K9 = lock("K9", "K9");
+  const K10 = lock("K10", "K10", { omerPerGnNum: 1n, omerPerGnDen: 3n });
+
+  const steps: Step[] = [
+    // ---- roots (FlopReceiptRoot.submit)
+    { op: "submit", note: "one signature is below the 2-of-3 threshold", msg: e1.msg, quorum: false, expect: "BelowThreshold" },
+    { op: "submit", note: "root for another Flop network", msg: { ...e1.msg, genesis: label("other-genesis") }, quorum: true, expect: "WrongGenesis" },
+    { op: "submit", note: "range ends before it starts", msg: { ...e1.msg, toBlock: 999n }, quorum: true, expect: "BadRange" },
+    { op: "submit", note: "count 0 with a non-zero root", msg: { ...e1.msg, count: 0n }, quorum: true, expect: "EmptyRoot" },
+    { op: "submit", note: "epoch 1", msg: e1.msg, quorum: true, expect: "OK" },
+    { op: "submit", note: "epoch 1 replayed", msg: e1.msg, quorum: true, expect: "WrongEpoch" },
+    { op: "submit", note: "non-contiguous epoch: 3 before 2", msg: { ...e3.msg, fromBlock: 2_000n }, quorum: true, expect: "WrongEpoch" },
+    { op: "submit", note: "epoch 2 leaving a block gap", msg: { ...e2.msg, fromBlock: 2_001n }, quorum: true, expect: "WrongFromBlock" },
+
+    // ---- hook
+    tag("only the pool manager may tag", POOL_A, e1, s.a1, "NotPoolManager", { caller: address("stranger") }),
+    tag("hook bound to chain 998, called on 999", POOL_A, e1, s.a1, "WrongChain", { chainId: 999n }),
+    tag("pool the hook does not serve", label("pool/unknown"), e1, s.a1, "UnknownPool"),
+    tag("model outside every pool", POOL_A, e1, s.unpooled, "ModelNotInPool"),
+    tag("pool A tags C1@1100", POOL_A, e1, s.a1, "OK"),
+    tag("the same job tagged again by pool A", POOL_A, e1, s.a1, "OK"),
+    tag("pool B serves model X too, but the job is pool A's", POOL_B, e1, s.a1, "JobBoundElsewhere"),
+    tag("pool A tags C1@1500", POOL_A, e1, s.a2, "OK"),
+    tag("pool A tags C2@1200", POOL_A, e1, s.b1, "OK"),
+    tag("pool B tags C3 (model Y)", POOL_B, e1, s.poolB, "OK"),
+    tag("forged proof", POOL_A, e1, s.b1, "ProofRejected", { proof: forged(e1, s.b1) }),
+    tag("leaf claims another genesis", POOL_A, e1, s.b1, "ProofRejected", { settlement: { ...s.b1, genesis: label("other-genesis") } }),
+    tag("inflated minerPaid under the original proof", POOL_A, e1, s.b1, "ProofRejected", { settlement: { ...s.b1, minerPaid: 5_000n } }),
+    tag("proof longer than MAX_PROOF", POOL_A, e1, s.b1, "ProofRejected", { proof: Array.from({ length: MAX_PROOF + 1 }, () => ZERO32) }),
+    tag("epoch not accepted yet", POOL_A, e1, s.b1, "ProofRejected", { epoch: 2n }),
+    tag("valid receipt in non-canonical hookData (trailing word)", POOL_A, e1, s.b1, "BadHookData", { rawHookData: `${encodeHookData({ epoch: 1n, settlement: s.b1, proof: pf(e1, s.b1) })}${"00".repeat(32)}` }),
+
+    // ---- rewards, both dedupe modes, metric minerPaid, pool A, window 1
+    claim("pool B's job in pool A's rewards", "sum", e1, s.poolB, "NotBoundToPool"),
+    claim("settlement no pool has tagged", "sum", e1, s.served, "NotBoundToPool"),
+    claim("sum: C1@1100", "sum", e1, s.a1, "OK", 100n, 100n),
+    claim("sum: the same leaf again (double-claim)", "sum", e1, s.a1, "LeafSpent"),
+    claim("sum: C1@1500 adds", "sum", e1, s.a2, "OK", 160n, 260n),
+    claim("latest: C1@1500 first", "latest", e1, s.a2, "OK", 160n, 160n),
+    claim("latest: the earlier C1@1100 is stale", "latest", e1, s.a1, "StaleLeaf"),
+    claim("latest: the same leaf again (double-claim)", "latest", e1, s.a2, "LeafSpent"),
+    claim("consumer bound to chain 998, called on 999", "sum", e1, s.b1, "WrongChain", undefined, undefined, { chainId: 999n }),
+    { op: "submit", note: "epoch 2", msg: e2.msg, quorum: true, expect: "OK" },
+    claim("epoch-1 leaf replayed as epoch 2", "sum", e1, s.b1, "ProofRejected", undefined, undefined, { epoch: 2n }),
+    tag("epoch-1 leaf replayed into epoch 2 at the hook", POOL_A, e1, s.b1, "ProofRejected", { epoch: 2n }),
+    tag("pool A tags C1@2100", POOL_A, e2, s.c1e2, "OK"),
+    tag("pool A tags C6@2500#3", POOL_A, e2, s.top1, "OK"),
+    tag("pool A tags C6@2500#7", POOL_A, e2, s.top2, "OK"),
+    tag("pool A tags C7@2600", POOL_A, e2, s.dec1, "OK"),
+    tag("pool A tags C7@2700", POOL_A, e2, s.dec2, "OK"),
+    tag("pool A tags C8@2800", POOL_A, e2, s.ag1, "OK"),
+    tag("pool A tags C8@2900", POOL_A, e2, s.ag2, "OK"),
+    claim("sum: C1 in epoch 2 is a separate (channel, epoch)", "sum", e2, s.c1e2, "OK", 200n, 200n),
+    claim("latest: C1 in epoch 2", "latest", e2, s.c1e2, "OK", 200n, 200n),
+    claim("latest: C6 event 3", "latest", e2, s.top1, "OK", 300n, 300n),
+    claim("latest: C6 event 7 in the same block tops up", "latest", e2, s.top2, "OK", 150n, 450n),
+    claim("sum: C6 event 7", "sum", e2, s.top2, "OK", 450n, 450n),
+    claim("sum: C6 event 3, claimed after event 7, still adds", "sum", e2, s.top1, "OK", 300n, 750n),
+    claim("latest: C7@2600", "latest", e2, s.dec1, "OK", 500n, 500n),
+    claim("latest: C7@2700 pays less than C7@2600", "latest", e2, s.dec2, "AmountDecreased"),
+    claim("sum: C7@2600", "sum", e2, s.dec1, "OK", 500n, 500n),
+    claim("sum: C7@2700", "sum", e2, s.dec2, "OK", 400n, 900n),
+    claim("latest: C8@2800", "latest", e2, s.ag1, "OK", 10n, 10n),
+    claim("latest: C8@2900 names another agent", "latest", e2, s.ag2, "AgentChanged"),
+    { op: "submit", note: "epoch 3, empty", msg: e3.msg, quorum: true, expect: "OK" },
+    claim("epoch 1 closed once epoch 3 is in (window 1)", "sum", e1, s.b1, "EpochExpired"),
+    claim("sum: epoch 2 still open", "sum", e2, s.ag1, "OK", 10n, 10n),
+
+    // ---- minter with the stub attestor: no unserved proof exists
+    { op: "open", note: "stub minter: lock on K2", chainId: EVM_CHAIN_ID, consumer: "stub", lock: K2s, expect: "OK" },
+    reclaim("stub: reclaim of unserved escrow cannot be proven", "stub", K2s, 3n, "UnservedProofUnavailable"),
+
+    // ---- minter with a test attestor
+    ...[K1, K2, K3, K4, K5, K6, K7, K8, K9, K10].map((l): Step => ({ op: "open", note: `open ${l.lockId.slice(0, 10)}`, chainId: EVM_CHAIN_ID, consumer: "attested", lock: l, expect: "OK" })),
+    { op: "open", note: "a second lock on K1's channel", chainId: EVM_CHAIN_ID, consumer: "attested", lock: { ...K1, lockId: label("lock/K1-dup") }, expect: "DuplicateLock" },
+    { op: "open", note: "payer equals provider", chainId: EVM_CHAIN_ID, consumer: "attested", lock: { ...lock("bad", "bad"), provider: address("payer/bad") }, expect: "BadLock" },
+    redeem("lock that was never opened", lock("bad", "bad"), e1, s.served, "UnknownLock"),
+    redeem("payer cannot redeem", K1, e1, s.served, "Unauthorized", undefined, { caller: K1.payer }),
+    redeem("settlement of another channel", K1, e1, s.a1, "ChannelMismatch"),
+    redeem("lock expects model Y", K8, e1, s.a1, "ModelMismatch"),
+    redeem("settled before the lock's minFlopBlock", K5, e1, s.early, "SettlementTooOld"),
+    redeem("settlement with zero compute", K6, e1, s.zeroGn, "NotServed"),
+    redeem("forged proof", K1, e1, s.served, "ProofRejected", undefined, { proof: forged(e1, s.served) }),
+    redeem("served: 2000 G_n = 2 OMER; provider 2, lender 2 of 3", K1, e1, s.served, "OK", [O(2n), O(2n), O(2n), 0n, 0n, O(1n)]),
+    redeem("second redeem", K1, e1, s.served, "AlreadySettled"),
+    redeem("overrun: 9 OMER owed against 4 escrowed", K7, e1, s.overrun, "OK", [O(9n), O(4n), 0n, 0n, O(5n), O(3n)]),
+    { op: "setUnserved", note: "attest K2 unserved as of epoch 3, last state at 2990", channelId: K2.channelId, epoch: 3n, lastFinalizedHeight: 2_990n, owed: 0n },
+    reclaim("3099 < 2990 + 100 + 20", "attested", K2, 3n, "TimeoutNotReached"),
+    reclaim("outsider under channel-parties policy", "attested", K2, 3n, "Unauthorized", undefined, address("stranger")),
+    reclaim("epoch 2 is not the latest root", "attested", K2, 2n, "StaleRoot"),
+    reclaim("no attestation for K3 in epoch 3", "attested", K3, 3n, "AttestationMismatch"),
+    { op: "submit", note: "epoch 4", msg: e4.msg, quorum: true, expect: "OK" },
+    reclaim("epoch 3 is no longer the latest root", "attested", K2, 3n, "StaleRoot"),
+    { op: "setUnserved", note: "attest K2 unserved as of epoch 4, last state at 4880", channelId: K2.channelId, epoch: 4n, lastFinalizedHeight: 4_880n, owed: 0n },
+    reclaim("4999 is one block short of 4880 + 100 + 20", "attested", K2, 4n, "TimeoutNotReached"),
+    { op: "setUnserved", note: "attest K2 unserved as of epoch 4, last state at 4879", channelId: K2.channelId, epoch: 4n, lastFinalizedHeight: 4_879n, owed: 0n },
+    reclaim("unserved exactly at 4879 + 100 + 20 = 4999: lender 3, payer 1", "attested", K2, 4n, "OK", [0n, 0n, O(3n), O(1n), 0n, 0n]),
+    redeem("K2 refund included first wins", K2, e1, s.served, "AlreadySettled"),
+    { op: "setUnserved", note: "attest K3 unserved (stale view: last state at 1500)", channelId: K3.channelId, epoch: 4n, lastFinalizedHeight: 1_500n, owed: 0n },
+    redeem("past the timeout a served redeem still wins until a reclaim is included", K3, e4, s.late, "OK", [O(1n) / 2n, O(1n) / 2n, O(3n), O(1n) / 2n, 0n, 0n]),
+    reclaim("K3 claim included first wins", "attested", K3, 4n, "AlreadySettled"),
+    { op: "setUnserved", note: "attest K4 stale with 1 OMER owed by its last state", channelId: K4.channelId, epoch: 4n, lastFinalizedHeight: 1_500n, owed: O(1n) },
+    reclaim("reclaim pays the attested owed first: provider 1, lender 3", "attested", K4, 4n, "OK", [O(1n), O(1n), O(3n), 0n, 0n, 0n], K4.payer),
+    redeem("K4 settled on Flop later, but the refund was included first", K4, e4, s.refunded, "AlreadySettled"),
+
+    redeem("owed rounds down: 1000 G_n at 1/3 base unit is 333", K10, e4, s.k10, "OK", [333n, 333n, O(3n), O(1n) - 333n, 0n, 0n]),
+    redeem("settlement names another miner than the lock", K9, e4, { ...s.k9, miner: label("miner/other") }, "PartyMismatch", undefined, { proof: pf(e4, s.k9) }),
+
+    // ---- equivocation freezes the roots; nothing verifies afterwards
+    { op: "freeze", note: "the same message twice is not equivocation", msgA: e4.msg, msgB: e4.msg, expect: "NotEquivocation" },
+    { op: "freeze", note: "two quorum-signed roots for epoch 4", msgA: e4.msg, msgB: { ...e4.msg, root: label("rival-root") }, expect: "OK" },
+    { op: "submit", note: "nothing is accepted after a freeze", msg: { ...e4.msg, epoch: 5n, fromBlock: 5_000n, toBlock: 5_999n }, quorum: true, expect: "IsFrozen" },
+    tag("frozen roots verify nothing (hook)", POOL_A, e1, s.b1, "ProofRejected"),
+    claim("frozen roots verify nothing (rewards), checked before the spent set", "latest", e2, s.c1e2, "ProofRejected"),
+    redeem("frozen roots verify nothing (minter): K9's valid receipt", K9, e4, s.k9, "ProofRejected"),
+    reclaim("reclaim stops when the roots are frozen", "attested", K6, 4n, "RootsFrozen"),
+  ];
+
+  // ---- run the models and hold them to the expectations above
+  const roots = new FlopReceiptRootModel({ genesis: GENESIS, startBlock: START_BLOCK, chainId: EVM_CHAIN_ID, verifyingContract: ROOTS_ADDRESS });
+  const hook = new ReceiptJobHookModel(roots, {
+    evmChainId: EVM_CHAIN_ID,
+    poolManager: MGR,
+    pools: [
+      { poolId: POOL_A, modelHashes: [MODEL_X] },
+      { poolId: POOL_B, modelHashes: [MODEL_X, MODEL_Y] },
+    ],
+  });
+  const rewardsBase = { evmChainId: EVM_CHAIN_ID, poolId: POOL_A, metric: "minerPaid" as const, claimWindowEpochs: CLAIM_WINDOW };
+  const rewards = {
+    sum: new AgentRewardsConsumerModel(roots, hook, { ...rewardsBase, mode: "per-leaf-sum" }),
+    latest: new AgentRewardsConsumerModel(roots, hook, { ...rewardsBase, mode: "latest-per-channel" }),
+  };
+  const attestor = new MockUnservedAttestor();
+  const minterParams = { evmChainId: EVM_CHAIN_ID, stalenessBlocks: N, challengeWindowBlocks: W, reclaimPolicy: "channel-parties" as const };
+  const minters = {
+    stub: new OmerMinterConsumerModel(roots, UNSERVED_ATTESTOR_STUB, minterParams),
+    attested: new OmerMinterConsumerModel(roots, attestor, minterParams),
+  };
+  const call = (chainId: bigint, caller: Hex = MGR): CallContext => ({ chainId, caller });
+
+  for (const [i, st] of steps.entries()) {
+    const what = `scenario step ${i} (${st.note})`;
+    switch (st.op) {
+      case "submit":
+        expectEqual(what, outcome(() => roots.submit(st.msg, st.quorum)), st.expect);
+        break;
+      case "freeze":
+        expectEqual(what, outcome(() => roots.freeze(st.msgA, true, st.msgB, true)), st.expect);
+        break;
+      case "tag": {
+        let job: Hex | undefined;
+        expectEqual(what, outcome(() => (job = hook.tag(call(st.chainId, st.caller), st.poolId, st.rawHookData ?? encodeHookData(st)).jobId)), st.expect);
+        expectEqual(`${what} jobId`, job, st.jobId);
+        break;
+      }
+      case "claim": {
+        let r: { credit: bigint; channelEpochTotal: bigint } | undefined;
+        expectEqual(what, outcome(() => (r = rewards[st.consumer].claim(call(st.chainId), st.epoch, st.settlement, st.proof))), st.expect);
+        expectEqual(`${what} credit`, r?.credit, st.credit);
+        expectEqual(`${what} total`, r?.channelEpochTotal, st.channelEpochTotal);
+        break;
+      }
+      case "open":
+        expectEqual(what, outcome(() => minters[st.consumer].open(call(st.chainId), st.lock)), st.expect);
+        break;
+      case "setUnserved":
+        attestor.set(st.channelId, st.epoch, { lastFinalizedHeight: st.lastFinalizedHeight, owed: st.owed });
+        break;
+      case "redeem": {
+        let p: PayoutTuple | undefined;
+        expectEqual(what, outcome(() => (p = tuple(minters[st.consumer].redeem(call(st.chainId, st.caller), st.lockId, st.epoch, st.settlement, st.proof)))), st.expect);
+        expectEqual(`${what} payouts`, p, st.payouts);
+        break;
+      }
+      case "reclaim": {
+        let p: PayoutTuple | undefined;
+        expectEqual(what, outcome(() => (p = tuple(minters[st.consumer].reclaim(call(st.chainId, st.caller), st.lockId, st.epoch, st.attestation)))), st.expect);
+        expectEqual(`${what} payouts`, p, st.payouts);
+        break;
+      }
+    }
+  }
+  const totals = { sum: rewards.sum.totalCredited(), latest: rewards.latest.totalCredited() };
+  expectEqual("sum total", totals.sum, 100n + 160n + 200n + 450n + 300n + 500n + 400n + 10n);
+  expectEqual("latest total", totals.latest, 160n + 200n + 300n + 150n + 500n + 10n);
+
+  const jsonSteps = steps.map((st) => {
+    const selector = "expect" in st ? selectorOf(st.expect) : undefined;
+    switch (st.op) {
+      case "submit":
+        return { ...st, selector, digest: digest712(st.msg, EVM_CHAIN_ID, ROOTS_ADDRESS) };
+      case "tag":
+        return { ...st, selector, settlement: settlementToJson(st.settlement), leaf: leafOf(st.settlement), hookData: st.rawHookData ?? encodeHookData(st), rawHookData: undefined, canonical: st.rawHookData === undefined };
+      case "claim":
+      case "redeem":
+        return { ...st, selector, settlement: settlementToJson(st.settlement), leaf: leafOf(st.settlement) };
+      default:
+        return { ...st, selector };
+    }
+  });
+
+  return {
+    params: {
+      genesis: GENESIS,
+      startBlock: START_BLOCK,
+      evmChainId: EVM_CHAIN_ID,
+      rootsAddress: ROOTS_ADDRESS,
+      attesters: 3,
+      threshold: 2,
+      poolManager: MGR,
+      pools: [
+        { poolId: POOL_A, modelHashes: [MODEL_X] },
+        { poolId: POOL_B, modelHashes: [MODEL_X, MODEL_Y] },
+      ],
+      rewards: { poolId: POOL_A, metric: "minerPaid", claimWindowEpochs: CLAIM_WINDOW, consumers: { sum: "per-leaf-sum", latest: "latest-per-channel" } },
+      minter: { stalenessBlocks: N, challengeWindowBlocks: W, reclaimPolicy: "channel-parties", consumers: { stub: "UnservedAttestorStub", attested: "test-only attestor" } },
+    },
+    epochs: [e1, e2, e3, e4].map((e) => ({ msg: e.msg, items: e.items.map((it) => ({ settlement: settlementToJson(it.settlement), leaf: it.leaf, proof: it.proof })) })),
+    steps: jsonSteps,
+    totals,
+  };
+}
+
 
 function jobIdCases() {
-  const base = treeSnapshot(3).commitment;
-  const flip = (h: Hex): Hex => `0x${h.slice(2, 64)}${((Number.parseInt(h.slice(64), 16) ^ 1) & 0xff).toString(16).padStart(2, "0")}`;
-  const variants: { name: string; commitment: RootCommitment }[] = [
-    { name: "base", commitment: base },
-    { name: "other-evm-chain", commitment: { ...base, evmChainId: 999n } },
-    { name: "other-flop-network", commitment: { ...base, flopGenesis: label("other-flop-genesis") } },
-    { name: "other-hook", commitment: { ...base, hook: address("other-hook") } },
-    { name: "other-pool", commitment: { ...base, poolId: flip(base.poolId) } },
-    { name: "next-epoch", commitment: { ...base, epoch: base.epoch + 1n, checkpointHeight: base.checkpointHeight + EPOCH_LENGTH } },
-    { name: "other-leaf-count", commitment: { ...base, leafCount: base.leafCount + 1n } },
-    { name: "other-blake-root", commitment: { ...base, blakeRoot: flip(base.blakeRoot) } },
-    { name: "other-keccak-root", commitment: { ...base, keccakRoot: flip(base.keccakRoot) } },
+  const base = settle({ ch: "JK", block: 4_200n, idx: 3n, gn: 11n, paid: 7n, burned: 1n, escrow: 9_000n });
+  const sameKey: Settlement = {
+    ...base,
+    settledBlockHash: label("jk/other-hash"),
+    agent: label("jk/other-agent"),
+    miner: label("jk/other-miner"),
+    modelHash: label("jk/other-model"),
+    aggregateGn: base.aggregateGn + 1n,
+    minerPaid: base.minerPaid + 9n,
+    burned: base.burned + 1n,
+    escrow: base.escrow + 1n,
+  };
+  const otherIndex: Settlement = { ...base, eventIndex: base.eventIndex + 1n };
+  const otherBlock: Settlement = { ...base, settledBlock: base.settledBlock + 1n };
+  const otherChannel: Settlement = { ...base, channelId: label("jk/other-channel") };
+  const otherGenesis: Settlement = { ...base, genesis: label("jk/other-genesis") };
+  const cases: { name: string; a: Settlement; b: Settlement; expectEqual: boolean }[] = [
+    { name: "same event key, different leaf layout", a: base, b: sameKey, expectEqual: true },
+    { name: "different eventIndex", a: base, b: otherIndex, expectEqual: false },
+    { name: "different settledBlock", a: base, b: otherBlock, expectEqual: false },
+    { name: "different channelId", a: base, b: otherChannel, expectEqual: false },
+    { name: "different genesis", a: base, b: otherGenesis, expectEqual: false },
   ];
-  const out = variants.map((v) => ({ name: v.name, commitment: commitmentJson(v.commitment), jobId: jobIdOf(v.commitment) }));
-  if (new Set(out.map((o) => o.jobId)).size !== out.length) throw new Error("jobId variants collide");
-  const leaf = treeSnapshot(3).tree.leaves[0]!;
-  const nullifiers = [
-    { name: "base", leaf },
-    { name: "other-epoch", leaf: { ...leaf, epoch: leaf.epoch + 1n } },
-    { name: "other-evm-chain", leaf: { ...leaf, evmChainId: 999n } },
-    { name: "other-pool", leaf: { ...leaf, poolId: flip(leaf.poolId) } },
-    { name: "other-channel", leaf: { ...leaf, channelId: label("channel/other") } },
-    { name: "same-receipt-newer-nonce", leaf: { ...leaf, nonce: leaf.nonce + 1n, cumulativeOwed: leaf.cumulativeOwed + 1n, stateRoot: label("x") } },
-  ].map((n) => ({
-    name: n.name,
-    flopGenesis: n.leaf.flopGenesis,
-    evmChainId: n.leaf.evmChainId,
-    poolId: n.leaf.poolId,
-    channelId: n.leaf.channelId,
-    epoch: n.leaf.epoch,
-    nullifier: nullifierOf(n.leaf),
-  }));
-  // A newer state of the same channel in the same epoch must hit the same nullifier.
-  expectEqual("nullifier ignores nonce", nullifiers[5]!.nullifier, nullifiers[0]!.nullifier);
-  return { jobIds: out, nullifiers };
-}
-
-// ---------------------------------------------------------------- settlement
-
-function payoutCases() {
-  const cases: { escrow: bigint; lenderPrincipal: bigint; owed: bigint; expect: [bigint, bigint, bigint, bigint, bigint] }[] = [
-    { escrow: 1000n, lenderPrincipal: 800n, owed: 0n, expect: [0n, 800n, 200n, 0n, 0n] },
-    { escrow: 1000n, lenderPrincipal: 800n, owed: 150n, expect: [150n, 800n, 50n, 0n, 0n] },
-    { escrow: 1000n, lenderPrincipal: 800n, owed: 200n, expect: [200n, 800n, 0n, 0n, 0n] },
-    { escrow: 1000n, lenderPrincipal: 800n, owed: 600n, expect: [600n, 400n, 0n, 0n, 400n] },
-    { escrow: 1000n, lenderPrincipal: 800n, owed: 1000n, expect: [1000n, 0n, 0n, 0n, 800n] },
-    { escrow: 1000n, lenderPrincipal: 800n, owed: 1500n, expect: [1000n, 0n, 0n, 500n, 800n] },
-    { escrow: 0n, lenderPrincipal: 0n, owed: 7n, expect: [0n, 0n, 0n, 7n, 0n] },
-    { escrow: 400n, lenderPrincipal: 0n, owed: 0n, expect: [0n, 0n, 400n, 0n, 0n] },
-    { escrow: U128_MAX, lenderPrincipal: U128_MAX, owed: U128_MAX, expect: [U128_MAX, 0n, 0n, 0n, U128_MAX] },
-  ];
-  return cases.map((c) => {
-    const p = waterfall(c.escrow, c.lenderPrincipal, c.owed);
-    const [toProvider, toLender, toPayer, overrun, lenderShortfall] = c.expect;
-    expectEqual(`waterfall(${c.escrow},${c.lenderPrincipal},${c.owed})`, p, { toProvider, toLender, toPayer, overrun, lenderShortfall });
-    return { escrow: c.escrow, lenderPrincipal: c.lenderPrincipal, owed: c.owed, toProvider, toLender, toPayer, overrun, lenderShortfall };
-  });
-}
-
-function reclaimEligibilityCases() {
-  const N = 100n;
-  const W = 20n;
-  const cases: [bigint, bigint, boolean][] = [
-    [20_950n, 20_999n, false],
-    [20_950n, 21_069n, false],
-    [20_950n, 21_070n, true],
-    [20_950n, 21_999n, true],
-    [0n, 119n, false],
-    [0n, 120n, true],
-  ];
-  return cases.map(([finalizedHeight, checkpointHeight, eligible]) => {
-    expectEqual(`reclaimEligible(${checkpointHeight},${finalizedHeight})`, reclaimEligible(checkpointHeight, finalizedHeight, N, W), eligible);
-    return { finalizedHeight, checkpointHeight, stalenessBlocks: N, challengeWindowBlocks: W, eligible };
-  });
-}
-
-// ---------------------------------------------------------------- AgentRewards scenario (IF-F11)
-
-function rewardsScenario() {
-  const E = omer;
-  const e10 = snapshot(10n, [
-    { ch: "A", nonce: 3n, owed: E(300n), escrow: E(1000n), height: 10_500n },
-    { ch: "B", nonce: 1n, owed: E(50n), escrow: E(500n), height: 10_200n },
-    { ch: "C", nonce: 2n, owed: E(900n), escrow: E(600n), height: 10_900n },
-    { ch: "D", nonce: 0n, owed: 0n, escrow: E(100n), height: 10_100n },
-  ]);
-  const e10Rival = snapshot(10n, [{ ch: "A", nonce: 9n, owed: E(999n), escrow: E(1000n), height: 10_600n }]);
-  const e11 = snapshot(11n, [
-    { ch: "A", nonce: 5n, owed: E(700n), escrow: E(1000n), height: 11_500n },
-    { ch: "B", nonce: 1n, owed: E(50n), escrow: E(500n), height: 10_200n },
-    { ch: "C", nonce: 4n, owed: E(1200n), escrow: E(600n), height: 11_800n },
-    { ch: "D", nonce: 0n, owed: 0n, escrow: E(100n), height: 10_100n },
-  ]);
-  const e9 = snapshot(9n, [{ ch: "B", nonce: 1n, owed: E(50n), escrow: E(500n), height: 9_200n }]);
-  // A faulty attester rolls channel A back to an older state in epoch 12.
-  const e12 = snapshot(12n, [
-    { ch: "A", nonce: 4n, owed: E(650n), escrow: E(1000n), height: 11_400n },
-    { ch: "B", nonce: 2n, owed: E(80n), escrow: E(500n), height: 12_100n },
-    { ch: "C", nonce: 4n, owed: E(1200n), escrow: E(600n), height: 11_800n },
-    { ch: "D", nonce: 0n, owed: 0n, escrow: E(100n), height: 10_100n },
-  ]);
-  const a10 = claimFor(e10, "A");
-  const otherChain = snapshotForDomain({ ...DOMAIN, evmChainId: 999n }, 10n, { ch: "A", nonce: 3n, owed: E(300n), escrow: E(1000n), height: 10_500n });
-  const otherPool = snapshotForDomain({ ...DOMAIN, poolId: label("other-pool") }, 10n, { ch: "A", nonce: 3n, owed: E(300n), escrow: E(1000n), height: 10_500n });
-
-  type Step =
-    | { op: "acceptRoot"; note: string; commitment: RootCommitment; attested: boolean; expect: string }
-    | { op: "claim"; note: string; claim: ReceiptClaim; expect: string; credit: bigint };
-  const accept = (note: string, snap: Snapshot | RootCommitment, expect = "OK", attested = true): Step => ({
-    op: "acceptRoot",
-    note,
-    commitment: "commitment" in snap ? snap.commitment : snap,
-    attested,
-    expect,
-  });
-  const e13 = { ...e12.commitment, epoch: 13n, checkpointHeight: checkpointOf(13n, EPOCH_LENGTH) };
-  const claim = (note: string, c: ReceiptClaim, expect: string, credit = 0n): Step => ({ op: "claim", note, claim: c, expect, credit });
-
-  const steps: Step[] = [
-    accept("root without attester threshold is rejected", e10, "UNAUTHORIZED_ATTESTER", false),
-    accept("epoch 10 root", e10),
-    accept("a second root for epoch 10 is rejected", e10Rival, "ROOT_EXISTS"),
-    claim("A epoch 10: first claim credits 300", a10, "OK", E(300n)),
-    claim("A epoch 10 again: double-claim", a10, "NULLIFIER_SPENT"),
-    claim("B epoch 10", claimFor(e10, "B"), "OK", E(50n)),
-    claim("C epoch 10: owed 900 > escrow 600, credit capped at escrow", claimFor(e10, "C"), "OK", E(600n)),
-    claim("D epoch 10: opening state carries no spend", claimFor(e10, "D"), "STATE_REPLAYED"),
-    claim("inflated cumulative owed with the original proof", { ...claimFor(e10, "B"), leaf: { ...claimFor(e10, "B").leaf, cumulativeOwed: E(499n) } }, "INVALID_PROOF"),
-    claim("receipt minted for chain 999, replayed on 998", { ...otherChain, jobId: e10.jobId }, "DOMAIN_MISMATCH"),
-    claim("receipt for another pool", { ...otherPool, jobId: e10.jobId }, "DOMAIN_MISMATCH"),
-    accept("epoch 11 root", e11),
-    claim("epoch-10 leaf replayed against the epoch-11 root", { ...a10, jobId: e11.jobId }, "EPOCH_MISMATCH"),
-    claim("A epoch 11: delta 700 - 300", claimFor(e11, "A"), "OK", E(400n)),
-    claim("B epoch 11: no progress since epoch 10", claimFor(e11, "B"), "STATE_REPLAYED"),
-    claim("C epoch 11: progress, but escrow-backed spend already credited", claimFor(e11, "C"), "OK", 0n),
-    accept("root for an older epoch is rejected", e9, "EPOCH_REGRESSION"),
-    accept("epoch 12 root from a faulty attester", e12),
-    claim("A epoch 12: nonce rolled back from 5 to 4", claimFor(e12, "A"), "STALE_NONCE"),
-    claim("B epoch 12: delta 80 - 50", claimFor(e12, "B"), "OK", E(30n)),
-    claim("D epoch 10 after epoch 12: outside the 1-epoch claim window", claimFor(e10, "D"), "EPOCH_EXPIRED"),
-    claim("D epoch 11 after epoch 12: still inside the window, reaches the state check", claimFor(e11, "D"), "STATE_REPLAYED"),
-    claim("unknown jobId", { ...claimFor(e12, "C"), jobId: label("not-a-root") }, "UNKNOWN_ROOT"),
-    accept("checkpoint one block before the end of epoch 13", { ...e13, checkpointHeight: e13.checkpointHeight - 1n }, "CHECKPOINT_MISMATCH"),
-    accept("leafCount 0 with non-empty roots", { ...e13, leafCount: 0n }, "EMPTY_ROOT_MISMATCH"),
-    accept("empty epoch 13 root", { ...e13, leafCount: 0n, keccakRoot: EMPTY_KECCAK_ROOT, blakeRoot: EMPTY_BLAKE_ROOT }),
-  ];
-
-  const params = { claimWindowEpochs: 1n };
-  const registry = new RootRegistry({ domain: DOMAIN, hook: HOOK, epochLength: EPOCH_LENGTH });
-  const model = new AgentRewardsModel(registry, params);
-  for (const [i, s] of steps.entries()) {
-    if (s.op === "acceptRoot") {
-      expectEqual(`rewards step ${i} (${s.note})`, outcome(() => registry.accept(s.commitment, s.attested)), s.expect);
-    } else {
-      let credit = 0n;
-      expectEqual(`rewards step ${i} (${s.note})`, outcome(() => (credit = model.claim(s.claim).credit)), s.expect);
-      expectEqual(`rewards step ${i} credit`, credit, s.credit);
-    }
+  for (const c of cases) {
+    const same = jobIdOf(c.a) === jobIdOf(c.b);
+    expectEqual(`jobId case ${c.name}`, same, c.expectEqual);
+    if (c.expectEqual) expectEqual(`jobId case ${c.name} leaves differ`, leafOf(c.a) === leafOf(c.b), false);
+    else expectEqual(`jobId case ${c.name} leaves`, leafOf(c.a) === leafOf(c.b), false);
   }
-  expectEqual("rewards total", model.totalCredited(), E(700n) + E(80n) + E(600n));
-
+  const id = jobIdOf(base);
+  expectEqual("JOB_ID_TAG", JOB_ID_TAG, bytesToHex(keccak256(utf8(JOB_ID_TAG_STRING))));
   return {
-    params: { ...DOMAIN, hook: HOOK, epochLength: EPOCH_LENGTH, claimWindowEpochs: params.claimWindowEpochs },
-    totalCredited: model.totalCredited(),
-    steps: steps.map((s) =>
-      s.op === "acceptRoot"
-        ? { op: s.op, note: s.note, expect: s.expect, attested: s.attested, commitment: commitmentJson(s.commitment), jobId: jobIdOf(s.commitment) }
-        : { op: s.op, note: s.note, expect: s.expect, credit: s.credit, jobId: s.claim.jobId, leaf: leafJson(s.claim.leaf), proof: proofJson(s.claim.proof) },
-    ),
+    tag: JOB_ID_TAG,
+    tagString: JOB_ID_TAG_STRING,
+    encoding:
+      'keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)); TAG = keccak256("InferenceFi.IF-D8.jobId.v1"); fields as flop-receipt-root v0.3.2 (bytes32, bytes32, uint64, uint32), each a 32-byte ABI word',
+    base: { settlement: settlementToJson(base), jobId: id, leaf: leafOf(base) },
+    cases: cases.map((c) => ({
+      name: c.name,
+      a: settlementToJson(c.a),
+      b: settlementToJson(c.b),
+      jobIdA: jobIdOf(c.a),
+      jobIdB: jobIdOf(c.b),
+      leafA: leafOf(c.a),
+      leafB: leafOf(c.b),
+      expectEqual: c.expectEqual,
+    })),
   };
 }
 
-function snapshotForDomain(domain: ReceiptDomain, epoch: bigint, spec: LeafSpec): ReceiptClaim {
-  const s = buildSnapshot({ domain, hook: HOOK, epoch, epochLength: EPOCH_LENGTH }, [leafOf(spec, epoch, domain)]);
-  return { jobId: s.jobId, leaf: s.tree.leaves[0]!, proof: s.tree.proof(0, KECCAK256) };
-}
-
-// ---------------------------------------------------------------- OmerMinter scenario (IF-F12)
-
-function minterScenario() {
-  const E = omer;
-  const params = { stalenessBlocks: 100n, challengeWindowBlocks: 20n, reclaimPolicy: "channel-parties" as const };
-  const lock = (n: string, L: bigint, D: bigint): LockInput => ({
-    lockId: label(`lock/${n}`),
-    channelId: label(`channel/${n}`),
-    provider: label(`provider/${n}`),
-    payer: label(`payer/${n}`),
-    lender: label(`lender/${n}`),
-    lenderPrincipal: L,
-    payerDeposit: D,
-  });
-  const locks = [
-    lock("M1", E(800n), E(200n)),
-    lock("M2", E(500n), E(500n)),
-    lock("M3", 0n, E(400n)),
-    lock("M4", E(300n), 0n),
-    lock("M5", E(600n), E(400n)),
-    lock("M6", E(500n), E(500n)),
-    { ...lock("M7", E(100n), E(100n)), provider: label("provider/someone-else") },
-  ];
-  const [M1, M2, M3, M4, M5, M6, M7] = locks as [LockInput, LockInput, LockInput, LockInput, LockInput, LockInput, LockInput];
-  const e20 = snapshot(20n, [
-    { ch: "M1", nonce: 4n, owed: E(600n), escrow: E(1000n), height: 20_950n },
-    { ch: "M2", nonce: 2n, owed: E(300n), escrow: E(1000n), height: 20_950n },
-    { ch: "M3", nonce: 0n, owed: 0n, escrow: E(400n), height: 20_000n },
-    { ch: "M4", nonce: 3n, owed: E(450n), escrow: E(300n), height: 20_500n },
-    { ch: "M5", nonce: 1n, owed: E(250n), escrow: E(1000n), height: 20_800n },
-  ]);
-  const e21 = snapshot(21n, [
-    { ch: "M2", nonce: 2n, owed: E(300n), escrow: E(1000n), height: 20_950n },
-    { ch: "M3", nonce: 0n, owed: 0n, escrow: E(400n), height: 20_000n },
-    { ch: "M4", nonce: 3n, owed: E(450n), escrow: E(300n), height: 20_500n },
-    { ch: "M5", nonce: 2n, owed: E(400n), escrow: E(1000n), height: 21_950n },
-    { ch: "M6", nonce: 1n, owed: E(100n), escrow: E(5000n), height: 21_100n },
-    { ch: "M7", nonce: 1n, owed: E(100n), escrow: E(200n), height: 21_100n },
-  ]);
-  type P = [bigint, bigint, bigint, bigint, bigint];
-  type Step =
-    | { op: "acceptRoot"; note: string; snap: Snapshot; expect: string }
-    | { op: "open"; note: string; lock: LockInput; expect: string }
-    | { op: "redeem" | "reclaim"; note: string; lockId: Hex; claim: ReceiptClaim; by: Hex; expect: string; payouts: P };
-  const Z: P = [0n, 0n, 0n, 0n, 0n];
-  const act = (op: "redeem" | "reclaim", note: string, l: LockInput, c: ReceiptClaim, by: Hex, expect: string, payouts: P = Z): Step => ({
-    op,
-    note,
-    lockId: l.lockId,
-    claim: c,
-    by,
-    expect,
-    payouts,
-  });
-  const steps: Step[] = [
-    { op: "acceptRoot", note: "epoch 20 root", snap: e20, expect: "OK" },
-    ...locks.map((l): Step => ({ op: "open", note: `open ${l.lockId.slice(0, 10)}`, lock: l, expect: "OK" })),
-    { op: "open", note: "a second lock on M1's channel", lock: { ...lock("M1", 1n, 1n), lockId: label("lock/M1-dup") }, expect: "DUPLICATE_LOCK" },
-    act("redeem", "payer cannot redeem", M1, claimFor(e20, "M1"), M1.payer, "UNAUTHORIZED"),
-    act("redeem", "served: provider 600 first, lender 400 of 800, payer 0", M1, claimFor(e20, "M1"), M1.provider, "OK", [E(600n), E(400n), 0n, 0n, E(400n)]),
-    act("redeem", "second redeem", M1, claimFor(e20, "M1"), M1.provider, "ALREADY_SETTLED"),
-    act("reclaim", "M2 at epoch 20: 20999 < 20950 + 100 + 20", M2, claimFor(e20, "M2"), M2.payer, "TIMEOUT_NOT_REACHED"),
-    act("redeem", "opening state is not a spend receipt", M3, claimFor(e20, "M3"), M3.provider, "NOT_SERVED"),
-    act("redeem", "receipt for another channel", M2, { ...claimFor(e20, "M1") }, M2.provider, "CHANNEL_MISMATCH"),
-    { op: "acceptRoot", note: "epoch 21 root", snap: e21, expect: "OK" },
-    act("reclaim", "reclaim must use the latest root", M2, claimFor(e20, "M2"), M2.payer, "STALE_ROOT"),
-    act("reclaim", "outsider under channel-parties policy", M2, claimFor(e21, "M2"), label("outsider"), "UNAUTHORIZED"),
-    act("reclaim", "unserved after timeout: provider 300, lender 500, payer 200", M2, claimFor(e21, "M2"), M2.lender, "OK", [E(300n), E(500n), E(200n), 0n, 0n]),
-    act("redeem", "refund included first wins", M2, claimFor(e21, "M2"), M2.provider, "ALREADY_SETTLED"),
-    act("redeem", "past the timeout a claim still wins until a refund is included; overrun capped", M4, claimFor(e20, "M4"), M4.provider, "OK", [E(300n), 0n, 0n, E(150n), E(300n)]),
-    act("reclaim", "claim included first wins", M4, claimFor(e21, "M4"), M4.payer, "ALREADY_SETTLED"),
-    act("reclaim", "M5 progressed at 21950: not stale yet", M5, claimFor(e21, "M5"), M5.payer, "TIMEOUT_NOT_REACHED"),
-    act("reclaim", "never served: everything back to the payer", M3, claimFor(e21, "M3"), M3.payer, "OK", [0n, 0n, E(400n), 0n, 0n]),
-    act("redeem", "served M5: provider 400, lender 600", M5, claimFor(e21, "M5"), M5.provider, "OK", [E(400n), E(600n), 0n, 0n, 0n]),
-    act("redeem", "receipt escrow 5000 does not match the 1000 locked", M6, claimFor(e21, "M6"), M6.provider, "ESCROW_MISMATCH"),
-    act("redeem", "receipt provider is not the lock's provider", M7, claimFor(e21, "M7"), M7.provider, "PARTY_MISMATCH"),
-  ];
-
-  const registry = new RootRegistry({ domain: DOMAIN, hook: HOOK, epochLength: EPOCH_LENGTH });
-  const minter = new OmerMinterModel(registry, params);
-  for (const [i, s] of steps.entries()) {
-    const what = `minter step ${i} (${s.note})`;
-    if (s.op === "acceptRoot") expectEqual(what, outcome(() => registry.accept(s.snap.commitment, true)), s.expect);
-    else if (s.op === "open") expectEqual(what, outcome(() => minter.open(s.lock)), s.expect);
-    else {
-      let got: P = Z;
-      expectEqual(
-        what,
-        outcome(() => {
-          const r = s.op === "redeem" ? minter.redeem(s.lockId, s.claim, s.by) : minter.reclaim(s.lockId, s.claim, s.by);
-          got = [r.toProvider, r.toLender, r.toPayer, r.overrun, r.lenderShortfall];
-        }),
-        s.expect,
-      );
-      expectEqual(`${what} payouts`, got, s.payouts);
-    }
-  }
-
-  const payoutJson = (p: P) => ({ toProvider: p[0], toLender: p[1], toPayer: p[2], overrun: p[3], lenderShortfall: p[4] });
-  return {
-    params: { ...DOMAIN, hook: HOOK, epochLength: EPOCH_LENGTH, ...params },
-    steps: steps.map((s) => {
-      if (s.op === "acceptRoot") return { op: s.op, note: s.note, expect: s.expect, commitment: commitmentJson(s.snap.commitment), jobId: s.snap.jobId };
-      if (s.op === "open") return { op: s.op, note: s.note, expect: s.expect, lock: { ...s.lock } };
-      return {
-        op: s.op,
-        note: s.note,
-        expect: s.expect,
-        lockId: s.lockId,
-        by: s.by,
-        jobId: s.claim.jobId,
-        leaf: leafJson(s.claim.leaf),
-        proof: proofJson(s.claim.proof),
-        payouts: payoutJson(s.payouts),
-      };
-    }),
-  };
-}
-
-// ---------------------------------------------------------------- assemble
-
-export function buildVectors(): Json {
+export function buildVectors() {
   return toJson({
     name: "inferencefi-receipt-root",
-    version: 1,
-    status: "Proposal for Inference Finance IF-D8. Not adopted. Synthetic identifiers only.",
-    encoding: {
-      prefixes: { leaf: Prefix.LEAF, node: Prefix.NODE, jobId: Prefix.JOB_ID, nullifier: Prefix.NULLIFIER },
-      leafVersion: 1,
-      leafBytes: 257,
-      emptyRoots: { keccak256: EMPTY_KECCAK_ROOT, blake2b256: EMPTY_BLAKE_ROOT },
-      epochLength: EPOCH_LENGTH,
+    version: 2,
+    format: {
+      adopts: "flop-receipt-root v0.3.2 (aa2fa591da38e6981a37693fb101c4f14835826d)",
+      leafType: LEAF_TYPE,
+      leafTypehash: LEAF_TYPEHASH,
+      rootType: ROOT_TYPE,
+      rootTypehash: ROOT_TYPEHASH,
+      domain: { name: "FlopReceiptRoot", version: "1", chainId: EVM_CHAIN_ID, verifyingContract: ROOTS_ADDRESS, separator: domainSeparator(EVM_CHAIN_ID, ROOTS_ADDRESS) },
+      leaf: "keccak256(keccak256(abi.encode(LEAF_TYPEHASH, genesis, channelId, settledBlock, settledBlockHash, eventIndex, agent, miner, modelHash, aggregateGn, minerPaid, burned, escrow)))",
+      node: "keccak256(min(a, b) || max(a, b)); leaves sorted ascending; odd node promoted; duplicates refused",
+      hookData: "abi.encode(uint64 epoch, Settlement s, bytes32[] proof); jobId is the event key, not in hookData",
+      jobId: 'keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)); TAG = keccak256("InferenceFi.IF-D8.jobId.v1"); fields as flop-receipt-root v0.3.2 (bytes32, bytes32, uint64, uint32), each a 32-byte ABI word',
+      jobIdTag: JOB_ID_TAG,
+      jobIdTagString: JOB_ID_TAG_STRING,
+      payoutTuple: ["owed", "toProvider", "toLender", "toPayer", "overrun", "lenderShortfall"],
+      upstreamFixture: "vendor/flop-receipt-root/test/fixtures/epoch.json (cross-checked by tests/upstream.test.ts)",
     },
-    domain: { ...DOMAIN, hook: HOOK },
-    ...primitives(),
-    leafEncodings: leafEncodings(),
-    trees: trees(),
-    negativeProofs: negativeProofs(),
-    ...jobIdCases(),
-    payouts: payoutCases(),
-    reclaimEligibility: reclaimEligibilityCases(),
-    rewardsScenario: rewardsScenario(),
-    minterScenario: minterScenario(),
+    leaves: leafVectors(),
+    trees: treeVectors(),
+    proofCases: proofCases(),
+    verifyCases: verifyCases(),
+    hookDataCases: hookDataCases(),
+    jobIdCases: jobIdCases(),
+    scenario: scenario(),
   });
 }
 

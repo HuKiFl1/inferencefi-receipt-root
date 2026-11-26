@@ -1,4 +1,4 @@
-import { ErrorCode, fail } from "./errors.js";
+import { ErrorCode, fail } from "../errors.js";
 
 const min = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 

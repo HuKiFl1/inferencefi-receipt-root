@@ -1,0 +1,3 @@
+[submodule "vendor/flop-receipt-root/lib/forge-std"]
+	path = vendor/flop-receipt-root/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
