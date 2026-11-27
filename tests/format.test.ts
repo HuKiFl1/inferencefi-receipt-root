@@ -230,8 +230,9 @@ describe("root message and contract model", () => {
 
 describe("jobId is the event key", () => {
   it("is keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)) with v0.3.2 widths", () => {
-    expect(JOB_ID_TAG_STRING).toBe("InferenceFi.IF-D8.jobId.v1");
+    expect(JOB_ID_TAG_STRING).toBe("FlopReceiptRoot.jobId.v1");
     expect(JOB_ID_TAG).toBe(bytesToHex(keccak256(utf8(JOB_ID_TAG_STRING))));
+    expect(JOB_ID_TAG).toBe("0x748fa4722b652359047a16941d7e978a83dcfab3a169bea48a5a663e7d31bd14");
     const s = settlement(1, 5n);
     const sameKey = { ...s, minerPaid: s.minerPaid + 1n, aggregateGn: s.aggregateGn + 2n, settledBlockHash: label("layout") };
     const otherIndex = { ...s, eventIndex: s.eventIndex + 1n };

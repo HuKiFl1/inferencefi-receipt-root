@@ -16,6 +16,10 @@ import {
   proofFor,
   settlementFromJson,
   type Hex,
+  type Settlement,
+  JOB_ID_TAG,
+  JOB_ID_TAG_STRING,
+  jobIdOf,
 } from "../src/index.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,11 +48,11 @@ const msg: RootMsg = {
 };
 const settlements = fixture.items.map((it) => settlementFromJson(it.fields));
 
-describe("vendored flop-receipt-root v0.3.2", () => {
+describe("vendored flop-receipt-root 19042c3", () => {
   it("is byte-identical to the manifest in VENDORED.md", () => {
     const manifest = readFileSync(join(vendor, "VENDORED.md"), "utf8");
     const rows = [...manifest.matchAll(/^\| `([^`]+)` \| `([0-9a-f]{64})` \|$/gm)];
-    expect(rows.length).toBe(8);
+    expect(rows.length).toBe(9);
     for (const [, file, sha] of rows) {
       expect(createHash("sha256").update(readFileSync(join(vendor, file!))).digest("hex"), file).toBe(sha);
     }
@@ -58,6 +62,7 @@ describe("vendored flop-receipt-root v0.3.2", () => {
     const sol = readFileSync(join(vendor, "contracts/src/FlopReceiptRoot.sol"), "utf8");
     expect(sol).toContain(`"${LEAF_TYPE}"`);
     expect(sol).toContain(`"${ROOT_TYPE}"`);
+    expect(sol).toContain(`keccak256("${JOB_ID_TAG_STRING}")`);
   });
 });
 
@@ -90,5 +95,62 @@ describe("TypeScript port vs the upstream fixture (99 devnet settlements)", () =
     m.submit(msg, true);
     for (const [i, it] of fixture.items.entries()) expect(m.verify(1n, settlements[i]!, it.proof), `item ${i}`).toBe(true);
     expect(m.verify(1n, { ...settlements[0]!, minerPaid: settlements[0]!.minerPaid + 1n }, fixture.items[0]!.proof)).toBe(false);
+  });
+});
+
+interface JobIdFixture {
+  tagString: string;
+  tag: Hex;
+  encodedBytes: number;
+  count: number;
+  cases: {
+    name: string;
+    genesis: Hex;
+    channelId: Hex;
+    settledBlock: string;
+    eventIndex: string;
+    encoded: Hex;
+    jobId: Hex;
+  }[];
+}
+
+/** Only the event-key fields matter for jobId; the rest of the leaf is dummy. */
+function settlementForJobId(c: JobIdFixture["cases"][number]): Settlement {
+  return {
+    genesis: c.genesis,
+    channelId: c.channelId,
+    settledBlock: BigInt(c.settledBlock),
+    settledBlockHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    eventIndex: BigInt(c.eventIndex),
+    agent: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    miner: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    modelHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    aggregateGn: 0n,
+    minerPaid: 0n,
+    burned: 0n,
+    escrow: 0n,
+  };
+}
+
+const jobIdFixture = JSON.parse(
+  readFileSync(join(vendor, "test/fixtures/jobid_vectors.json"), "utf8"),
+) as JobIdFixture;
+
+describe("TypeScript port vs the published jobId vectors", () => {
+  it("uses the upstream TAG and encoding", () => {
+    expect(JOB_ID_TAG_STRING).toBe(jobIdFixture.tagString);
+    expect(JOB_ID_TAG).toBe(jobIdFixture.tag);
+    expect(JOB_ID_TAG).toBe("0x748fa4722b652359047a16941d7e978a83dcfab3a169bea48a5a663e7d31bd14");
+    expect(jobIdFixture.encodedBytes).toBe(160);
+    expect(jobIdFixture.cases.length).toBe(6);
+    expect(jobIdFixture.count).toBe(6);
+  });
+
+  it("matches every published jobId byte for byte", () => {
+    for (const c of jobIdFixture.cases) {
+      expect(jobIdOf(settlementForJobId(c)), c.name).toBe(c.jobId);
+    }
+    // eventIndex+1 of item 0 must differ from item 0, as the fixture states
+    expect(jobIdFixture.cases[3]!.jobId).not.toBe(jobIdFixture.cases[0]!.jobId);
   });
 });

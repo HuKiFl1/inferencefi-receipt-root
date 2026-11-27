@@ -1,12 +1,14 @@
 # IF-D8: the hook jobId as a Flop receipt root
 
-**Status:** proposal v0.2 for Inference Finance decision IF-D8, pending the
-spec owner and palmer, and pending the answers to
-[flop-receipt-root issue #4](https://github.com/xbtMelchizedek/flop-receipt-root/issues/4).
-Nothing here is adopted, deployed or audited.
+**Status:** proposal v0.3 for Inference Finance decision IF-D8, pending the
+spec owner and palmer, and pending the remaining answers to
+[flop-receipt-root issue #4](https://github.com/xbtMelchizedek/flop-receipt-root/issues/4)
+(Q4, the hook jobId, is answered in commit 19042c3 and the comment on that
+issue). Nothing here is adopted, deployed or audited.
 
-**This version adopts flop-receipt-root v0.3.2** (tag `v0.3.2`, commit
-`aa2fa59`). Inference Finance consumers should use one receipt-root format,
+**This version adopts flop-receipt-root 19042c3** (tag `v0.3.2` plus the
+normative jobId; leaf and root format unchanged, commit
+`19042c3e05d6cc259ae2c1c67294f558143ac990`). Inference Finance consumers should use one receipt-root format,
 and that format is xbtMelchizedek's. This repo no longer defines a leaf, a tree
 or a root message of its own. It is the **consumer layer** on top of it: the
 hook's jobId mapping, AgentRewards (IF-F11) and OmerMinter (IF-F12), written as
@@ -17,8 +19,9 @@ a TypeScript reference, Solidity reference contracts, and shared vectors.
 - **hookData** = `abi.encode(uint64 epoch, Settlement s, bytes32[] proof)`.
 - **jobId** is the **event key**, not the leaf hash:
   `keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex))`,
-  where `TAG = keccak256("InferenceFi.IF-D8.jobId.v1")` (keccak of the UTF-8
-  bytes of that string) and the four fields use the flop-receipt-root v0.3.2
+  where `TAG = keccak256("FlopReceiptRoot.jobId.v1")` (keccak of the UTF-8
+  bytes of that string; the upstream tag pinned in 19042c3, value
+  `0x748fa472…7d31bd14`) and the four fields use the flop-receipt-root
   ABI widths (`bytes32`, `bytes32`, `uint64`, `uint32`), each a 32-byte word.
   The event key is the stable identity of a Settled event; `leafOf(s)` stays
   the Merkle proof input.
@@ -61,7 +64,7 @@ All amounts and heights are integers (`bigint` in TypeScript, `uint64` or
 
 ## 2. What moved
 
-| Concern | v0.1 (this repo, withdrawn) | v0.2 (adopts flop-receipt-root v0.3.2) |
+| Concern | v0.1 (this repo, withdrawn) | v0.2 / v0.3 (adopts flop-receipt-root; v0.3 uses the upstream jobId TAG) |
 |---|---|---|
 | Leaf | per-channel **state** leaf (nonce, cumulative owed, state root, height), with pool and chain inside | one leaf per **Settled / force_settled event**: `(genesis, channelId, settledBlock, settledBlockHash, eventIndex, agent, miner, modelHash, aggregateGn, minerPaid, burned, escrow)` |
 | Leaf hash | `keccak(0x00 ‖ fields)`, plus a parallel BLAKE2b tree | `keccak(keccak(abi.encode(LEAF_TYPEHASH, …)))` |
@@ -271,8 +274,9 @@ waterfall). It is not a proposal for how unserved channels should be proven.
 ## 7. Open questions
 
 Questions 1–4 are those asked in
-[issue #4](https://github.com/xbtMelchizedek/flop-receipt-root/issues/4) (open,
-no reply yet). The rest are for the Inference Finance spec owner.
+[issue #4](https://github.com/xbtMelchizedek/flop-receipt-root/issues/4).
+Q1–Q3 are still open. Q4 is answered in flop-receipt-root 19042c3 (see
+below). The rest are for the Inference Finance spec owner.
 
 1. **Unserved channels (issue #4, Q1).** Reclaim needs one of: (a) leaves for
    open or unserved channels at each checkpoint, such as
@@ -287,14 +291,15 @@ no reply yet). The rest are for the Inference Finance spec owner.
 3. **Dedupe unit for IF-F11 (issue #4, Q3).** Nullify and sum every leaf, or
    count only the latest leaf per (channel, epoch)? Both are implemented
    behind a switch.
-4. **Hook jobId (issue #4, Q4).** This proposal takes the event-key
-   derivation proposed on the board: `jobId` is
+4. **Hook jobId (issue #4, Q4).** Answered in flop-receipt-root 19042c3 and
+   the comment on issue #4. This proposal uses that mapping: `jobId` is
    `keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex))`
-   and `leafOf(s)` remains the proof input. `hookData` is still
-   `(epoch, settlement, proof)`. The `jobIdCases` in `vectors/if-d8-v2.json`
-   (same event key with a different leaf layout yields the same jobId; a
-   different `eventIndex` yields a different jobId) are offered to upstream
-   as normative vectors.
+   with `TAG = keccak256("FlopReceiptRoot.jobId.v1")`, and `leafOf(s)` remains
+   the proof input. `hookData` is still `(epoch, settlement, proof)`. The
+   `jobIdCases` in `vectors/if-d8-v2.json` check same-key / different-index
+   behaviour; `tests/upstream.test.ts` and the vendored Foundry suite also
+   replay the six published upstream vectors, including the three devnet
+   fixture settlements.
 5. **Metric.** Should AgentRewards credit `minerPaid` (FLOP paid) or
    `aggregateGn` (compute)? Who is credited: the agent (this proposal), the
    miner, or both?
@@ -353,7 +358,7 @@ Only public specifications are cited. No third-party code is copied except
 the vendored, MIT-licensed flop-receipt-root files, which are attributed in
 `vendor/flop-receipt-root/VENDORED.md`.
 
-- flop-receipt-root v0.3.2 by xbtMelchizedek, MIT:
+- flop-receipt-root 19042c3 (v0.3.2 + normative jobId) by xbtMelchizedek, MIT:
   [github.com/xbtMelchizedek/flop-receipt-root](https://github.com/xbtMelchizedek/flop-receipt-root),
   and [issue #4](https://github.com/xbtMelchizedek/flop-receipt-root/issues/4).
 - EIP-712, *Typed structured data hashing and signing*.
