@@ -1,7 +1,7 @@
 {
   "name": "inferencefi-receipt-root",
   "version": "0.1.0",
-  "description": "Inference Finance IF-D8 consumer layer on xbtMelchizedek's flop-receipt-root v0.3.2: TypeScript reference of the receipt-root format, hook/rewards/minter consumer models, Solidity reference consumers, and shared test vectors.",
+  "description": "Inference Finance IF-D8 consumer layer on xbtMelchizedek's flop-receipt-root (19042c3, v0.3.2 + normative jobId): TypeScript reference of the receipt-root format, hook/rewards/minter consumer models, Solidity reference consumers, and shared test vectors.",
   "license": "MIT",
   "type": "module",
   "private": true,

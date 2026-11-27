@@ -4,11 +4,11 @@ pragma solidity 0.8.28;
 import {FlopReceiptRoot} from "flop-receipt-root/FlopReceiptRoot.sol";
 
 /// @title ReceiptJobHook (reference, IF-D8)
-/// @notice The jobId mapping of an Inference Finance swap hook on top of FlopReceiptRoot v0.3.2.
+/// @notice The jobId mapping of an Inference Finance swap hook on top of FlopReceiptRoot 19042c3.
 ///         A swap's hookData is `abi.encode(uint64 epoch, Settlement s, bytes32[] proof)`.
 ///         The jobId is the event key `keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex))`
-///         with `TAG = keccak256("InferenceFi.IF-D8.jobId.v1")` and the v0.3.2 field widths
-///         (bytes32, bytes32, uint64, uint32). `FlopReceiptRoot.leafOf(s)` stays the proof input.
+///         with `TAG = keccak256("FlopReceiptRoot.jobId.v1")` (same constant as FlopReceiptRoot.JOB_ID_TAG)
+///         and the field widths (bytes32, bytes32, uint64, uint32). `FlopReceiptRoot.leafOf(s)` stays the proof input.
 ///         The leaf names no pool or EVM chain, so the binding lives here: the first pool to tag
 ///         a jobId owns it on this chain.
 /// @dev `tag` is the body a real v4 `beforeSwap` would run; the PoolManager plumbing is left out.
@@ -19,8 +19,8 @@ contract ReceiptJobHook {
         bytes32[] modelHashes;
     }
 
-    /// @dev keccak256 of the UTF-8 bytes of the string, as `keccak256("InferenceFi.IF-D8.jobId.v1")`.
-    bytes32 public constant JOB_ID_TAG = keccak256("InferenceFi.IF-D8.jobId.v1");
+    /// @dev Same value as FlopReceiptRoot.JOB_ID_TAG: keccak256 of the UTF-8 bytes, not ABI-encoded.
+    bytes32 public constant JOB_ID_TAG = keccak256("FlopReceiptRoot.jobId.v1");
 
     FlopReceiptRoot public immutable ROOTS;
     uint256 public immutable EVM_CHAIN_ID;

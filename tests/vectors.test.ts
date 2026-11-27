@@ -25,7 +25,7 @@ describe("vectors/if-d8-v2.json", () => {
     const jobNames = v.jobIdCases.cases.map((c: { name: string }) => c.name);
     expect(jobNames).toContain("same event key, different leaf layout");
     expect(jobNames).toContain("different eventIndex");
-    expect(v.format.jobIdTagString).toBe("InferenceFi.IF-D8.jobId.v1");
+    expect(v.format.jobIdTagString).toBe("FlopReceiptRoot.jobId.v1");
     expect(v.format.jobIdTag).toBe(lib.JOB_ID_TAG);
   });
 });

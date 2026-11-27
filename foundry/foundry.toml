@@ -15,7 +15,7 @@ optimizer = true
 optimizer_runs = 200
 gas_limit = "18446744073709551615"
 memory_limit = 1073741824
-fs_permissions = [{ access = "read", path = "../vectors" }]
+fs_permissions = [{ access = "read", path = "../vectors" }, { access = "read", path = "../vendor/flop-receipt-root/test/fixtures" }]
 
 [profile.default.fuzz]
 runs = 256

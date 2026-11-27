@@ -686,7 +686,7 @@ function jobIdCases() {
     tag: JOB_ID_TAG,
     tagString: JOB_ID_TAG_STRING,
     encoding:
-      'keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)); TAG = keccak256("InferenceFi.IF-D8.jobId.v1"); fields as flop-receipt-root v0.3.2 (bytes32, bytes32, uint64, uint32), each a 32-byte ABI word',
+      'keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)); TAG = keccak256("FlopReceiptRoot.jobId.v1"); fields as flop-receipt-root (bytes32, bytes32, uint64, uint32), each a 32-byte ABI word, 160 bytes',
     base: { settlement: settlementToJson(base), jobId: id, leaf: leafOf(base) },
     cases: cases.map((c) => ({
       name: c.name,
@@ -704,9 +704,9 @@ function jobIdCases() {
 export function buildVectors() {
   return toJson({
     name: "inferencefi-receipt-root",
-    version: 2,
+    version: 3,
     format: {
-      adopts: "flop-receipt-root v0.3.2 (aa2fa591da38e6981a37693fb101c4f14835826d)",
+      adopts: "flop-receipt-root 19042c3e05d6cc259ae2c1c67294f558143ac990 (v0.3.2 + normative jobId)",
       leafType: LEAF_TYPE,
       leafTypehash: LEAF_TYPEHASH,
       rootType: ROOT_TYPE,
@@ -715,7 +715,7 @@ export function buildVectors() {
       leaf: "keccak256(keccak256(abi.encode(LEAF_TYPEHASH, genesis, channelId, settledBlock, settledBlockHash, eventIndex, agent, miner, modelHash, aggregateGn, minerPaid, burned, escrow)))",
       node: "keccak256(min(a, b) || max(a, b)); leaves sorted ascending; odd node promoted; duplicates refused",
       hookData: "abi.encode(uint64 epoch, Settlement s, bytes32[] proof); jobId is the event key, not in hookData",
-      jobId: 'keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)); TAG = keccak256("InferenceFi.IF-D8.jobId.v1"); fields as flop-receipt-root v0.3.2 (bytes32, bytes32, uint64, uint32), each a 32-byte ABI word',
+      jobId: 'keccak256(abi.encode(TAG, genesis, channelId, settledBlock, eventIndex)); TAG = keccak256("FlopReceiptRoot.jobId.v1"); fields as flop-receipt-root (bytes32, bytes32, uint64, uint32), each a 32-byte ABI word, 160 bytes',
       jobIdTag: JOB_ID_TAG,
       jobIdTagString: JOB_ID_TAG_STRING,
       payoutTuple: ["owed", "toProvider", "toLender", "toPayer", "overrun", "lenderShortfall"],

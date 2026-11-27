@@ -172,11 +172,14 @@ contract ConsumerVectorsTest is Base {
 
     function test_jobIdCases() public {
         _deployAll();
-        assertEq(hook.JOB_ID_TAG(), keccak256("InferenceFi.IF-D8.jobId.v1"));
+        assertEq(hook.JOB_ID_TAG(), keccak256("FlopReceiptRoot.jobId.v1"));
+        assertEq(hook.JOB_ID_TAG(), roots.JOB_ID_TAG());
+        assertEq(hook.JOB_ID_TAG(), bytes32(0x748fa4722b652359047a16941d7e978a83dcfab3a169bea48a5a663e7d31bd14));
         assertEq(hook.JOB_ID_TAG(), _b(".jobIdCases.tag"));
-        assertEq(_s(".jobIdCases.tagString"), "InferenceFi.IF-D8.jobId.v1");
+        assertEq(_s(".jobIdCases.tagString"), "FlopReceiptRoot.jobId.v1");
         FlopReceiptRoot.Settlement memory base = _settlement(".jobIdCases.base.settlement");
         assertEq(hook.jobIdOf(base), _b(".jobIdCases.base.jobId"));
+        assertEq(hook.jobIdOf(base), roots.jobIdOf(base));
         assertEq(roots.leafOf(base), _b(".jobIdCases.base.leaf"));
         assertEq(
             hook.jobIdOf(base),
@@ -189,6 +192,8 @@ contract ConsumerVectorsTest is Base {
             FlopReceiptRoot.Settlement memory b = _settlement(string.concat(c, ".b"));
             bytes32 ja = hook.jobIdOf(a);
             bytes32 jb = hook.jobIdOf(b);
+            assertEq(ja, roots.jobIdOf(a), _s(string.concat(c, ".name")));
+            assertEq(jb, roots.jobIdOf(b), _s(string.concat(c, ".name")));
             assertEq(ja, _b(string.concat(c, ".jobIdA")), _s(string.concat(c, ".name")));
             assertEq(jb, _b(string.concat(c, ".jobIdB")), _s(string.concat(c, ".name")));
             assertEq(roots.leafOf(a), _b(string.concat(c, ".leafA")));
